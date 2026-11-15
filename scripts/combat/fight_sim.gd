@@ -4,15 +4,18 @@ extends RefCounted
 
 const Data = preload("res://scripts/combat/fighter_data.gd")
 const MOVE_DATA = {
-	"light": {"startup": 5, "active": 3, "recovery": 8, "hitstun": 12, "blockstun": 8, "hitstop": 2, "damage": 4, "range": 108},
-	"low": {"startup": 6, "active": 3, "recovery": 10, "hitstun": 13, "blockstun": 9, "hitstop": 2, "damage": 5, "range": 115},
-	"kick": {"startup": 8, "active": 4, "recovery": 12, "hitstun": 15, "blockstun": 10, "hitstop": 3, "damage": 6, "range": 140},
-	"heavy": {"startup": 12, "active": 4, "recovery": 18, "hitstun": 18, "blockstun": 12, "hitstop": 5, "damage": 9, "range": 165}
+	"light": {"startup": 5, "active": 3, "recovery": 8, "hitstun": 12, "blockstun": 8, "hitstop": 2, "damage": 6, "range": 108},
+	"low": {"startup": 6, "active": 3, "recovery": 10, "hitstun": 13, "blockstun": 9, "hitstop": 2, "damage": 8, "range": 115},
+	"kick": {"startup": 8, "active": 4, "recovery": 12, "hitstun": 15, "blockstun": 10, "hitstop": 3, "damage": 10, "range": 140},
+	"heavy": {"startup": 12, "active": 4, "recovery": 18, "hitstun": 18, "blockstun": 12, "hitstop": 5, "damage": 14, "range": 165},
+	"uppercut": {"startup": 10, "active": 4, "recovery": 20, "hitstun": 20, "blockstun": 12, "hitstop": 5, "damage": 16, "range": 120}
 }
 const GRAB_RANGE = 100
 const ROUND_FRAMES = 5940
 const KNOCKDOWN_FRAMES = 48
 const GETUP_FRAMES = 12
+const JUMP_APEX = 110
+const DOUBLE_JUMP_APEX = 160
 var fighters: Array = []
 var projectiles: Array = []
 var events: Array = []
@@ -53,7 +56,7 @@ func setup(p1_id: String, p2_id: String, upgrades1: Dictionary = {}, upgrades2: 
 
 func _make_fighter(id: String, index: int, upgrades: Dictionary) -> Dictionary:
 	var f: Dictionary = Data.get_fighter(id)
-	f["max_hp"] = mini(125, int(f.hp) + maxi(0, int(upgrades.get("hp", 0))) * 5)
+	f["max_hp"] = mini(250, int(f.hp) + maxi(0, int(upgrades.get("hp", 0))) * 10)
 	f["damage_rank"] = mini(2, ["Light", "Standard", "Power"].find(f.damage_class) + maxi(0, int(upgrades.get("damage", 0))))
 	f["speed_rank"] = mini(2, ["Slow", "Standard", "Fast"].find(f.speed_class) + maxi(0, int(upgrades.get("speed", 0))))
 	f["reach_percent"] = {"Short": 90, "Standard": 100, "Long": 110}[f.reach_class]
@@ -67,7 +70,8 @@ func _reset_fighter(f: Dictionary, index: int, carry: int) -> void:
 		"state": "idle", "move": "", "attack_frame": 0, "timer": 0, "stun": 0, "connected": false, "can_cancel": false,
 		"combo_hits": 0, "combo_damage": 0, "combo_timer": 0, "blocking": false, "down": false, "block_age": 999,
 		"block_paid": false, "engagement": 0, "prev_move": 0, "prev_down": false, "prev_jump": false, "prev_block": false,
-		"jump_frame": 0, "walk_remainder": 0, "taps": [], "throw_ready": 0, "break_taps": [], "prompt": {}, "queued_attack": "",
+		"jump_frame": 0, "jump_origin": 0, "normal_jump": false, "double_jump_used": false,
+		"walk_remainder": 0, "taps": [], "throw_ready": 0, "break_taps": [], "prompt": {}, "queued_attack": "",
 		"attack_low": false, "contact_dog": false, "minor_low": false, "minor_hits": 0, "big_index": 0, "big_protected": false, "big_attempted": false,
 		"big_holding": false, "big_owner": -1, "throw_target": -1, "throw_damage": 0,
 		"dog_x": 340 if index == 0 else 940, "dog_cooldown": 100}, true)
@@ -96,7 +100,9 @@ func step(inputs: Array) -> void:
 		for i in range(2):
 			var pressed: String = str(last_inputs[i].get("attack", ""))
 			if not pressed.is_empty():
-				fighters[i].queued_attack = pressed
+				# Preserve a crouched heavy pressed during the freeze, even if Down
+				# is released before the queued move can start.
+				fighters[i].queued_attack = "uppercut" if pressed == "heavy" and (bool(last_inputs[i].get("down", false)) or str(fighters[i].state) == "crouch") else pressed
 		return
 	combat_frame += 1
 	if not training:
@@ -161,6 +167,11 @@ func _update_input(i: int, input: Dictionary) -> void:
 			else:
 				_start_minor(i)
 		attack = ""
+	# A second jump changes the arc without cancelling an airborne punch/kick.
+	if jump and not bool(f.prev_jump) and int(f.y) > 0 and bool(f.normal_jump) and not bool(f.double_jump_used) and int(f.stun) <= 0 and (str(f.state) == "jump" or (str(f.state) == "attack" and MOVE_DATA.has(str(f.move)))):
+		f.jump_origin = int(f.y)
+		f.jump_frame = 1
+		f.double_jump_used = true
 	if _can_act(f):
 		if attack == "special":
 			_offer_special(i, "minor" if move_axis == -int(f.facing) or int(f.meter) < 60 else "big")
@@ -170,6 +181,9 @@ func _update_input(i: int, input: Dictionary) -> void:
 			_start_regular(i, attack)
 		elif jump and not bool(f.prev_jump) and int(f.y) == 0:
 			f.jump_frame = 1
+			f.jump_origin = 0
+			f.normal_jump = true
+			f.double_jump_used = false
 			f.state = "jump"
 		elif int(f.y) == 0 and str(f.state) in ["idle", "walk", "crouch"]:
 			f.state = "crouch" if down else ("walk" if move_axis != 0 else "idle")
@@ -234,13 +248,15 @@ func _protected(f: Dictionary) -> bool:
 
 func _start_regular(i: int, move_name: String) -> void:
 	var f: Dictionary = fighters[i]
+	if move_name == "heavy" and (bool(f.down) or str(f.state) == "crouch"):
+		move_name = "uppercut"
 	f.state = "attack"
 	f.move = move_name
 	f.attack_frame = 0
 	f.connected = false
 	f.can_cancel = false
 	f.blocking = false
-	f.attack_low = move_name == "low" or (move_name == "heavy" and bool(f.down))
+	f.attack_low = move_name == "low"
 	events.append({"type": "attack", "attacker": i, "move": move_name})
 
 func _start_throw(i: int) -> void:
@@ -271,7 +287,8 @@ func _start_big(i: int) -> void:
 	f.attack_frame = 0
 	f.can_cancel = false
 	f.blocking = false
-	var reduction: int = mini(5, int(int(f.combo_damage) / 5)) * 6
+	# Health/damage units doubled; each old five-point cue step is now ten.
+	var reduction: int = mini(5, int(int(f.combo_damage) / 10)) * 6
 	f.timer = 60 - reduction
 	# Capture preserves the manual combo through the cue and every special hit.
 	f.combo_timer = int(f.timer) + f.big_hits.size() * 17 + 10
@@ -303,11 +320,20 @@ func _tick_fighter(i: int) -> void:
 				f.meter = mini(int(f.meter), 40)
 			f.prompt = {}
 	if int(f.jump_frame) > 0 and str(f.state) not in ["big_capture", "grabbed"]:
-		f.y = maxi(0, int(int(f.jump_frame) * (42 - int(f.jump_frame)) / 4))
+		var arc_frame: int = int(f.jump_frame)
+		if bool(f.normal_jump) and bool(f.double_jump_used):
+			# Continue the parabola below its takeoff height until landing. Its
+			# peak is always 160, including an early or late second press.
+			f.y = maxi(0, int(f.jump_origin) + int((DOUBLE_JUMP_APEX - int(f.jump_origin)) * arc_frame * (42 - arc_frame) / 441))
+		else:
+			f.y = maxi(0, int(arc_frame * (42 - arc_frame) / 4))
 		f.jump_frame = int(f.jump_frame) + 1
-		if int(f.jump_frame) > 42:
+		if int(f.y) == 0:
 			f.y = 0
 			f.jump_frame = 0
+			f.jump_origin = 0
+			f.normal_jump = false
+			f.double_jump_used = false
 			if str(f.state) == "jump":
 				f.state = "landing"
 				f.timer = 4
@@ -352,7 +378,7 @@ func _tick_attack(i: int) -> void:
 		var data: Dictionary = MOVE_DATA[move_name]
 		if age >= int(data.startup) and age < int(data.startup) + int(data.active) and not bool(f.connected):
 			var reach: int = int(int(data.range) * int(f.reach_percent) / 100)
-			if _in_attack_range(i, reach, bool(f.attack_low)):
+			if _in_attack_range(i, reach, bool(f.attack_low), move_name == "uppercut"):
 				f.connected = true
 				f.can_cancel = true
 				pending_contacts.append({"kind": "regular", "owner": i, "move": move_name, "dog": f.contact_dog})
@@ -367,7 +393,7 @@ func _tick_attack(i: int) -> void:
 				f.state = "throw_hold"
 				f.timer = 36
 				f.throw_target = 1 - i
-				f.throw_damage = [0, 10, 15, 20][mini(3, int(int(f.meter) / 20))]
+				f.throw_damage = [0, 16, 22, 30][mini(3, int(int(f.meter) / 20))]
 				f.combo_timer = 40
 				target.state = "grabbed"
 				target.stun = 0
@@ -380,7 +406,7 @@ func _tick_attack(i: int) -> void:
 	elif move_name == "minor":
 		_tick_minor(i)
 
-func _in_attack_range(i: int, reach: int, low: bool) -> bool:
+func _in_attack_range(i: int, reach: int, low: bool, rising: bool = false) -> bool:
 	var f: Dictionary = fighters[i]
 	var target: Dictionary = fighters[1 - i]
 	if _protected(target) or str(target.state) in ["big_capture", "grabbed"]:
@@ -388,8 +414,11 @@ func _in_attack_range(i: int, reach: int, low: bool) -> bool:
 	if low and int(target.y) > 25:
 		return false
 	var vertical_ok: bool = absi(int(f.y) - int(target.y)) <= 85
-	var body: bool = vertical_ok and absi(int(f.x) - int(target.x)) <= reach and (int(target.x) - int(f.x)) * int(f.facing) >= -35
-	var dog: bool = str(target.id) == "cin" and int(f.y) < 65 and absi(int(f.x) - int(target.dog_x)) <= reach and (int(target.dog_x) - int(f.x)) * int(f.facing) >= -35
+	if rising:
+		vertical_ok = int(target.y) >= int(f.y) - 85 and int(target.y) <= int(f.y) + 180
+	var behind_allowance: int = 0 if rising else -35
+	var body: bool = vertical_ok and absi(int(f.x) - int(target.x)) <= reach and (int(target.x) - int(f.x)) * int(f.facing) >= behind_allowance
+	var dog: bool = str(target.id) == "cin" and int(f.y) < 65 and absi(int(f.x) - int(target.dog_x)) <= reach and (int(target.dog_x) - int(f.x)) * int(f.facing) >= behind_allowance
 	f.contact_dog = dog
 	return body or dog
 
@@ -402,12 +431,12 @@ func _hit_regular(i: int, move_name: String, dog: bool, target_dog: bool = false
 	if _protected(target):
 		return
 	var data: Dictionary = MOVE_DATA[move_name]
-	var damage: int = 3 if dog else int(data.damage) + int(f.damage_rank) - 1
+	var damage: int = 6 if dog else int(data.damage) + (int(f.damage_rank) - 1) * 2
 	var low: bool = dog or bool(f.attack_low)
 	var blocked: bool = _guard_matches(target, low) and not target_dog
 	if blocked:
 		var timed: bool = int(target.block_age) <= 15
-		var chip: int = 0 if timed else (2 if move_name == "heavy" else 1)
+		var chip: int = 0 if timed else (4 if move_name in ["heavy", "uppercut"] else 2)
 		if timed and not bool(target.block_paid):
 			target.meter = mini(60, int(target.meter) + 10)
 			target.block_paid = true
@@ -425,10 +454,28 @@ func _hit_regular(i: int, move_name: String, dog: bool, target_dog: bool = false
 		f.combo_damage = int(f.combo_damage) + damage
 		f.combo_timer = int(data.hitstun) + 3
 		_stagger(1 - i, int(data.hitstun), false)
+		if move_name == "uppercut" and not dog:
+			_launch_uppercut(1 - i)
 		if int(f.combo_hits) >= 5:
 			_knockdown(1 - i)
 			f.combo_timer = 0
 	hitstop = maxi(hitstop, int(data.hitstop))
+
+func _launch_uppercut(index: int) -> void:
+	var target: Dictionary = fighters[index]
+	if str(target.state) in ["big", "big_start", "big_capture"]:
+		return
+	# Rejoin the rising half of the normal arc. Even a double-jumping target
+	# above it is capped at the normal apex, and a launch cannot double jump.
+	var height: int = mini(JUMP_APEX, int(target.y))
+	var launch_frame: int = 1
+	while launch_frame < 21 and int(launch_frame * (42 - launch_frame) / 4) < height:
+		launch_frame += 1
+	target.y = int(launch_frame * (42 - launch_frame) / 4)
+	target.jump_frame = launch_frame
+	target.jump_origin = 0
+	target.normal_jump = false
+	target.double_jump_used = false
 
 func _damage(i: int, damage: int, kind: String, blocked: bool, minimum_hp: int = 0) -> void:
 	var target: Dictionary = fighters[1 - i]
@@ -458,6 +505,9 @@ func _knockdown(index: int) -> void:
 	f.stun = 0
 	f.y = 0
 	f.jump_frame = 0
+	f.jump_origin = 0
+	f.normal_jump = false
+	f.double_jump_used = false
 	f.move = ""
 	f.blocking = false
 	f.can_cancel = false
@@ -478,13 +528,13 @@ func _tick_minor(i: int) -> void:
 			f.x = clampi(int(f.x) + int(f.facing) * 13, 65, 1215)
 			if not bool(f.connected) and _in_attack_range(i, 120, bool(f.minor_low)):
 				f.connected = true
-				pending_contacts.append({"kind": "minor", "owner": i, "damage": 14, "chip": 3, "final": true, "dog": f.contact_dog})
+				pending_contacts.append({"kind": "minor", "owner": i, "damage": 22, "chip": 4, "final": true, "dog": f.contact_dog})
 		if age >= 43:
 			f.state = "idle"
 			f.move = ""
 	else:
 		if age in [10, 18] and _in_attack_range(i, 160, bool(f.minor_low)):
-			pending_contacts.append({"kind": "minor", "owner": i, "damage": 7, "chip": 1 if age == 10 else 2, "final": age == 18, "dog": f.contact_dog})
+			pending_contacts.append({"kind": "minor", "owner": i, "damage": 10, "chip": 2, "final": age == 18, "dog": f.contact_dog})
 		if age >= 34:
 			f.state = "idle"
 			f.move = ""
@@ -517,11 +567,11 @@ func _update_projectiles() -> void:
 		if (body or dog) and not _protected(target) and str(target.state) not in ["grabbed", "big_capture"]:
 			# Attack height is stored with the projectile, independent of owner's next input.
 			var blocked: bool = _guard_matches(target, bool(p.low)) and not dog
-			_damage(int(p.owner), 3 if blocked else 14, "minor_hit", blocked)
+			_damage(int(p.owner), 4 if blocked else 22, "minor_hit", blocked)
 			_stagger(1 - int(p.owner), 10 if blocked else 14, blocked)
 			if not blocked:
 				fighters[int(p.owner)].combo_hits = int(fighters[int(p.owner)].combo_hits) + 1
-				fighters[int(p.owner)].combo_damage = int(fighters[int(p.owner)].combo_damage) + 14
+				fighters[int(p.owner)].combo_damage = int(fighters[int(p.owner)].combo_damage) + 22
 				_knockdown(1 - int(p.owner))
 			hitstop = maxi(hitstop, 3)
 			projectiles.remove_at(n)
@@ -595,6 +645,9 @@ func _tick_big_start(i: int) -> void:
 	target.move = ""
 	target.y = 0
 	target.jump_frame = 0
+	target.jump_origin = 0
+	target.normal_jump = false
+	target.double_jump_used = false
 	events.append({"type": "big_capture", "attacker": i, "target": 1 - i})
 
 func _tick_big(i: int) -> void:
@@ -715,6 +768,8 @@ func snapshot() -> Dictionary:
 
 func restore(data: Dictionary) -> void:
 	fighters = data.fighters.duplicate(true)
+	for fighter in fighters:
+		fighter.merge({"jump_origin": 0, "normal_jump": int(fighter.jump_frame) > 0, "double_jump_used": false})
 	projectiles = data.projectiles.duplicate(true)
 	frame = int(data.frame)
 	combat_frame = int(data.combat_frame)

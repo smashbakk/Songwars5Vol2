@@ -65,9 +65,9 @@ func _press(point: Vector2) -> void:
 			actions.append(prompt_button if name == "prompt" else name)
 			break
 
-func sample() -> Dictionary:
+func sample(keyboard_down: bool = false) -> Dictionary:
 	_regions()
-	var result := {"move":0,"down":false,"jump":false,"block":false,"attack":""}
+	var result := {"move":0,"down":keyboard_down,"jump":false,"block":false,"attack":""}
 	for point in contacts.values():
 		for name in regions:
 			if not regions[name].has_point(point):
@@ -91,7 +91,7 @@ func clear() -> void:
 func _draw() -> void:
 	_regions()
 	var font := ThemeDB.fallback_font
-	var labels := {"left":"←","right":"→","up":"↑","up_back":"↖","up_forward":"↗","down_back":"↙","down_forward":"↘","down":"↓","punch":"PUNCH","kick":"KICK","light":"LP","low":"LOW","heavy":"HK","throw":"THROW","special":"SPECIAL","block":"HOLD\nBLOCK","prompt":prompt_button.to_upper()}
+	var labels := {"left":"←","right":"→","up":"↑","up_back":"↖","up_forward":"↗","down_back":"↙","down_forward":"↘","down":"↓","punch":"PUNCH","kick":"KICK","light":"LP","low":"LOW","heavy":"HEAVY","throw":"THROW","special":"SPECIAL","block":"HOLD\nBLOCK","prompt":prompt_button.to_upper()}
 	for name in regions:
 		var r: Rect2 = regions[name]
 		var held := false

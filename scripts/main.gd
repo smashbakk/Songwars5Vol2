@@ -191,7 +191,7 @@ func show_layout(first: bool = false) -> void:
 	var col := page("Choose your controls")
 	text(col,"Both layouts use identical damage and timing. Change your layout between matches in Settings.",20,MUTED)
 	button(col,"SIMPLIFIED  /  Pad + Punch + Kick",func(): store.set_setting("layout","simplified"); show_menu(),true)
-	text(col,"Hold Down for low attacks. Double-tap a direction to prompt a special. Throw with Back → Forward → Punch.",17,MUTED)
+	text(col,"Down + Punch gives a low punch; Down + Kick gives an uppercut. Release and press Up again in the air to double jump. Double-tap a direction to prompt a special.",17,MUTED)
 	button(col,"TRADITIONAL  /  Four attacks + Throw + Special",func(): store.set_setting("layout","traditional"); show_menu())
 	if not first: button(col,"Back",show_settings)
 
@@ -455,14 +455,18 @@ func _process(delta: float) -> void:
 	if is_instance_valid(arena):arena.queue_redraw()
 
 func _player_input() -> Dictionary:
-	var value: Dictionary=touch.sample() if is_instance_valid(touch) else {"move":0,"down":false,"jump":false,"attack":"","block":false}
+	var keyboard_down:=Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
+	var value: Dictionary=touch.sample(keyboard_down) if is_instance_valid(touch) else {"move":0,"down":false,"jump":false,"attack":"","block":false}
 	var left:=Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)
 	var right:=Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)
 	if left or right:value.move=int(right)-int(left)
-	value.down=value.down or Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
+	value.down=value.down or keyboard_down
 	value.jump=value.jump or Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
 	value.block=value.block or Input.is_physical_key_pressed(KEY_SPACE)
 	if not keyboard_attack.is_empty():value.attack=keyboard_attack;keyboard_attack=""
+	# Resolve simplified attacks after merging devices, so either device can hold Down.
+	if value.attack=="punch":value.attack="low" if value.down else "light"
+	elif value.attack=="kick" and value.down and store.data.settings.layout=="simplified":value.attack="heavy"
 	return value
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -470,11 +474,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if event.physical_keycode==KEY_ESCAPE and screen=="fight":toggle_pause();return
 	if event.physical_keycode==KEY_M:store.set_setting("muted",not store.data.settings.muted)
 	if screen!="fight" or paused:return
-	var low:=Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
 	match event.physical_keycode:
-		KEY_J:keyboard_attack="low" if low and store.data.settings.layout=="simplified" else "light"
+		KEY_J:keyboard_attack="punch" if store.data.settings.layout=="simplified" else "light"
 		KEY_U:keyboard_attack="low"
-		KEY_K:keyboard_attack="heavy" if low and store.data.settings.layout=="simplified" else "kick"
+		KEY_K:keyboard_attack="kick"
 		KEY_I:keyboard_attack="heavy"
 		KEY_L:keyboard_attack="throw"
 		KEY_O:keyboard_attack="special"
@@ -591,11 +594,11 @@ func confirm_upgrade(stat:String) -> void:
 func show_help(from_pause:bool=false) -> void:
 	if not from_pause:clear_ui("help")
 	var col:=page("The move guide")
-	text(col,"MOVE  WASD / arrows. Up jumps; steer in the air. Hold Back to block high, Down + Back to block low. Space / HOLD BLOCK is the accessible block control. No air blocking.",18)
-	text(col,"ATTACK  J light punch · U low punch · K kick · I heavy kick. Simplified: Down + J/K gives low punch / heavy kick. Five regular hits knock down. Attacks chain manually after a clean hit; every hit keeps full damage.",18)
+	text(col,"MOVE  WASD / arrows. Up jumps; release and press Up again while airborne for one higher double jump. Steer and attack in the air. Hold Back to block high, Down + Back to block low. Space / HOLD BLOCK is the accessible block control. No air blocking.",18)
+	text(col,"ATTACK  J light punch · U low punch · K kick · I heavy. Down + I / Heavy is a rising uppercut that catches jump-ins. Simplified: Down + J / Punch gives a low punch; Down + K / Kick gives an uppercut. Five regular hits knock down. Attacks chain manually after a clean hit; every hit keeps full damage.",18)
 	text(col,"SPECIALS  Double-tap Back with 1 notch, or Forward with 3, then press the prompted attack within 2 seconds. Traditional Special / O opens the same prompt: hold Back for minor, Forward for big. Missing a big prompt costs 1 notch.",18)
 	text(col,"DEFEND  Block within 0.25 seconds of a regular hit to earn half a notch once per engagement. During a big special, tap and keep holding BLOCK / Space for half damage and survival. Jump before capture to evade.",18)
-	text(col,"THROW  Back → Forward → Punch, or L / Throw, at close range with at least 1 notch. Meter is held, not spent: 10 / 15 / 20 damage. When grabbed, Back → Back → Down within 0.6 seconds breaks free.",18)
+	text(col,"THROW  Back → Forward → Punch, or L / Throw, at close range with at least 1 notch. Meter is held, not spent: 16 / 22 / 30 damage. When grabbed, Back → Back → Down within 0.6 seconds breaks free.",18)
 	text(col,"TRAIN  Free reset, idle / guard / CPU dummy, full starting meter, F2 refill, and three quick practice challenges. Esc pauses. M mutes placeholder effects.",18,MUTED)
 	button(col,"Back",func():
 		if from_pause:_rebuild_fight_ui();paused=true;toggle_pause()

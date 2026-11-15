@@ -215,12 +215,16 @@ func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: St
 	var tall := 1.13 if id == "hood" else 1.0
 	var broad := 1.30 if id == "hood" else (1.05 if id == "rico" else 0.94)
 	var down := state in ["knockdown", "down", "getup", "ko"]
-	var crouch := bool(f.get("down", false)) or state == "crouch" or move == "low"
+	var uppercut := move == "uppercut" and state == "attack"
+	var uppercut_age := int(f.get("attack_frame", 0))
+	var crouch := uppercut_age < 8 if uppercut else (bool(f.get("down", false)) or state == "crouch" or move == "low")
 	var block := state in ["block", "blocking", "blockstun"] or bool(f.get("blocking", false))
 	var hurt := state in ["hurt", "hitstun", "captured", "grabbed"]
 	var walk := state == "walk" or state == "walking"
-	var attack := move in ["light", "low", "kick", "heavy", "throw", "minor", "big"] and not down
+	var attack := move in ["light", "low", "kick", "heavy", "uppercut", "throw", "minor", "big"] and not down
 	var bob := sin(float(tick) * 0.13) * 2.0 if not down else 0.0
+	if uppercut and uppercut_age >= 8:
+		bob -= 12.0
 	draw_set_transform(_world_offset, 0, _world_scale)
 	draw_set_transform(_world_offset + Vector2(at.x, 512) * _world_scale, 0, _world_scale)
 	_ellipse(Rect2(-42 * broad, -5, 84 * broad, 12), Color(0.035, 0.035, 0.08, 0.55))
@@ -289,6 +293,13 @@ func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: St
 	elif hurt:
 		elbow = Vector2(34, -77)
 		fist = Vector2(55, -69)
+	elif uppercut:
+		# Coil low, then extend the fist above the head through the active frames.
+		var rise := clampf(float(uppercut_age - 4) / 6.0, 0.0, 1.0)
+		if uppercut_age > 16:
+			rise = maxf(0.0, 1.0 - float(uppercut_age - 16) / 18.0)
+		elbow = Vector2(34, -76).lerp(Vector2(41, -133), rise)
+		fist = Vector2(38, -71).lerp(Vector2(47, -184), rise)
 	elif attack and move in ["light", "low", "throw", "minor", "big"]:
 		elbow = Vector2(55, -97 if move != "low" else -65)
 		fist = Vector2(103 if move != "throw" else 76, -98 if move != "low" else -64)
@@ -297,6 +308,8 @@ func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: St
 	draw_circle(fist, 7.5, skin)
 	if block:
 		draw_arc(Vector2(27, -103), 39, -1.12, 1.12, 24, Color(0.48, 0.89, 0.94, 0.6), 3)
+	if uppercut and uppercut_age in range(8, 17):
+		draw_arc(Vector2(10, -121), 67, -1.10, 0.90, 24, Color(accent, 0.75), 5)
 	# Belt and small accent preserve fighter identity without stat labels.
 	draw_line(Vector2(-23, -53), Vector2(20, -53), accent, 5)
 	if attack and move in ["minor", "big"]:

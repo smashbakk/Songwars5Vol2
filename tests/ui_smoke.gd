@@ -4,6 +4,7 @@ extends SceneTree
 const Story = preload("res://scripts/progression/story_data.gd")
 const Store = preload("res://scripts/progression/save_store.gd")
 const Data = preload("res://scripts/combat/fighter_data.gd")
+const Sim = preload("res://scripts/combat/fight_sim.gd")
 
 var game
 var failures: Array[String] = []
@@ -62,6 +63,106 @@ func _finger(index: int, point: Vector2, held: bool) -> void:
 	event.pressed = held
 	game.touch._input(event)
 
+func _key(code: Key, held: bool) -> void:
+	var event := InputEventKey.new()
+	event.keycode = code
+	event.physical_keycode = code
+	event.pressed = held
+	Input.parse_input_event(event)
+	Input.flush_buffered_events()
+	game._unhandled_key_input(event)
+
+func _uppercut_input(sample: Dictionary, label: String) -> void:
+	for id in Data.IDS:
+		var combat = Sim.new()
+		combat.setup(id, "bank", {}, {}, true)
+		combat.countdown = 0
+		combat.step([sample, {}])
+		_check(combat.fighters[0].move == "uppercut" and not combat.fighters[0].attack_low, label + " starts a high uppercut for " + id)
+
+func _keyboard_checks() -> void:
+	var original_layout: String = game.store.data.settings.layout
+	for layout in ["simplified", "traditional"]:
+		game.store.set_setting("layout", layout)
+		game.touch.layout = layout
+		game.touch.clear()
+		_key(KEY_S, true)
+		_key(KEY_I, true)
+		var sample: Dictionary = game._player_input()
+		_check(sample.down and sample.attack == "heavy", layout + " keyboard Down + I delivers heavy with Down")
+		_uppercut_input(sample, layout + " keyboard Down + I")
+		_key(KEY_I, false)
+		_key(KEY_U, true)
+		_check(game._player_input().attack == "low", layout + " Down + U keeps drop-down punch")
+		_key(KEY_U, false)
+		_key(KEY_J, true)
+		_check(game._player_input().attack == ("low" if layout == "simplified" else "light"), layout + " Down + J retains punch mapping")
+		_key(KEY_J, false)
+		_key(KEY_K, true)
+		sample = game._player_input()
+		_check(sample.attack == ("heavy" if layout == "simplified" else "kick"), layout + " Down + K retains layout mapping")
+		if layout == "simplified":
+			_uppercut_input(sample, "simplified keyboard Down + K")
+		_key(KEY_K, false)
+		_key(KEY_S, false)
+		_key(KEY_W, true)
+		_check(game._player_input().jump and game._player_input().jump, layout + " held keyboard Up stays held for simulator edge detection")
+		_key(KEY_W, false)
+		_check(not game._player_input().jump, layout + " release keyboard Up clears jump")
+		_key(KEY_W, true)
+		_check(game._player_input().jump, layout + " fresh keyboard Up delivers second jump press")
+		_key(KEY_W, false)
+		if layout == "simplified":
+			game.touch._regions()
+			_finger(0, game.touch.regions.down.get_center(), true)
+			_key(KEY_K, true)
+			_uppercut_input(game._player_input(), "touch Down + keyboard Kick")
+			_key(KEY_K, false)
+			game.touch.clear()
+			_key(KEY_S, true)
+			_finger(1, game.touch.regions.kick.get_center(), true)
+			_uppercut_input(game._player_input(), "keyboard Down + touch Kick")
+			_finger(1, game.touch.regions.kick.get_center(), false)
+			_finger(1, game.touch.regions.punch.get_center(), true)
+			_check(game._player_input().attack == "low", "keyboard Down + touch Punch preserves drop-down punch")
+			_key(KEY_S, false)
+			game.touch.clear()
+	game.store.set_setting("layout", original_layout)
+	game.touch.layout = original_layout
+
+func _hud_checks() -> void:
+	var target: Dictionary = game.sim.fighters[1]
+	var previous_hp: int = target.hp
+	target.hp = target.max_hp
+	game._update_hud()
+	_check(target.max_hp == 200 and game.health_labels[1].text.contains("200/200"), "health label shows the real 200 HP pool")
+	_check(game.health_bars[1].max_value == 200 and game.health_bars[1].value == 200, "health bar uses the real 200 HP pool")
+	target.hp -= 14
+	game._update_hud()
+	_check(game.health_labels[1].text.contains("186/200"), "heavy damage displays the true remaining pool")
+	_check(is_equal_approx(game.health_bars[1].value / game.health_bars[1].max_value, 0.93), "clean heavy drains exactly seven percent of the health bar")
+	target.hp = previous_hp
+	game._update_hud()
+
+func _pose_checks() -> void:
+	var fight = game.arena.sim
+	for id in Data.IDS:
+		var preview = Sim.new()
+		preview.setup(id, id, {}, {}, true)
+		game.arena.sim = preview
+		for phase in [3, 10, 24]:
+			for fighter in preview.fighters:
+				fighter.state = "attack"
+				fighter.move = "uppercut"
+				fighter.down = true
+				fighter.attack_frame = phase
+			var before: Dictionary = preview.snapshot()
+			game.arena.queue_redraw()
+			await _settle()
+			_check(preview.snapshot() == before, "%s uppercut pose at frame %d renders both facings without changing simulation" % [id, phase])
+	game.arena.sim = fight
+	game.arena.queue_redraw()
+
 func _touch_checks() -> void:
 	var touch = game.touch
 	touch.layout = "simplified"
@@ -74,12 +175,19 @@ func _touch_checks() -> void:
 	_check(touch.sample().attack == "", "held attack does not auto-chain")
 	_finger(1, touch.regions.punch.get_center(), false)
 	_finger(1, touch.regions.kick.get_center(), true)
-	_check(touch.sample().attack == "heavy", "simplified down plus kick maps heavy")
+	sample = touch.sample()
+	_check(sample.down and sample.attack == "heavy", "simplified down plus kick maps heavy")
+	_uppercut_input(sample, "simplified touch Down + Kick")
 	touch.clear()
 	_finger(0, touch.regions.up_forward.get_center(), true)
 	_finger(1, touch.regions.block.get_center(), true)
 	sample = touch.sample()
 	_check(sample.move == 1 and sample.jump and sample.block, "movement diagonal and block are independent contacts")
+	_check(touch.sample().jump, "held touch Up remains held for simulator edge detection")
+	_finger(0, touch.regions.up_forward.get_center(), false)
+	_check(not touch.sample().jump, "releasing touch Up clears jump")
+	_finger(0, touch.regions.up_forward.get_center(), true)
+	_check(touch.sample().jump, "fresh touch Up delivers second jump press")
 	touch.clear()
 	_check(not touch.sample().block and touch.contacts.is_empty(), "clear releases all touch holds")
 	touch.layout = "traditional"
@@ -88,6 +196,13 @@ func _touch_checks() -> void:
 		touch.clear()
 		_finger(2, touch.regions[action].get_center(), true)
 		_check(touch.sample().attack == action, "traditional touch maps " + action)
+	touch.clear()
+	_finger(0, touch.regions.down.get_center(), true)
+	_finger(1, touch.regions.heavy.get_center(), true)
+	_uppercut_input(touch.sample(), "traditional touch Down + Heavy")
+	_finger(1, touch.regions.heavy.get_center(), false)
+	_finger(1, touch.regions.low.get_center(), true)
+	_check(touch.sample().attack == "low", "traditional touch Down + Low preserves drop-down punch")
 	touch.clear()
 	touch.prompt_button = "heavy"
 	touch._regions()
@@ -144,6 +259,9 @@ func _run() -> void:
 	game.start_fight()
 	await _settle()
 	_touch_checks()
+	_keyboard_checks()
+	_hud_checks()
+	await _pose_checks()
 	for tick in range(600):
 		game._physics_process(1.0 / 60.0)
 	_check(game.sim.frame == 600, "CPU match runs 600 fixed simulation steps")

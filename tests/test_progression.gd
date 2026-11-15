@@ -3,6 +3,7 @@ extends RefCounted
 
 const SaveStore = preload("res://scripts/progression/save_store.gd")
 const StoryData = preload("res://scripts/progression/story_data.gd")
+const Sim = preload("res://scripts/combat/fight_sim.gd")
 static var checks := 0
 
 static func run() -> Array:
@@ -20,8 +21,10 @@ static func run() -> Array:
 	_check(store.get_points("cin") == 1 and store.get_points("bank") == 0, "Story points belong to the winning fighter", failures)
 	_check(store.data.story.current == 1, "First win advances to the next match", failures)
 	_check("bank" in store.data.story.unlocked_chapters, "Beating Bank unlocks his chapter immediately", failures)
+	var health_quote: Dictionary = store.quote_upgrade("cin", "hp")
+	_check(health_quote.allowed and health_quote.cost == 1 and health_quote.before == "200 HP" and health_quote.after == "210 HP", "Health quote shows the real pool and ten-HP step", failures)
 	_check(store.purchase_upgrade("cin", "hp"), "Health purchase spends one point", failures)
-	_check(store.get_upgrades("cin").hp == 1 and store.get_points("cin") == 0, "Health upgrades use +5 steps and exact cost", failures)
+	_check(store.get_upgrades("cin").hp == 1 and store.get_points("cin") == 0, "Health upgrades use +10 steps and exact cost", failures)
 	store.record_win("cin", "prologue_0", "bank")
 	store.record_win("cin", "prologue_0", "bank")
 	store.record_win("cin", "prologue_0", "bank")
@@ -37,7 +40,8 @@ static func run() -> Array:
 	for i in range(4):
 		_grant_point(store, "cin")
 		_check(store.purchase_upgrade("cin", "hp"), "Health purchases before cap", failures)
-	_check(store.get_upgrades("cin").hp == 5 and not store.purchase_upgrade("cin", "hp"), "Health stops at 125", failures)
+	_check(store.get_upgrades("cin").hp == 5 and not store.purchase_upgrade("cin", "hp"), "Health stops at 250 after the same five purchases", failures)
+	_check(store.quote_upgrade("cin", "hp").before == "250 HP", "Capped health quote uses the real pool", failures)
 	store.record_win("bank", "prologue_2", "hood")
 	_check(store.data.story.current == 1 and store.get_points("bank") == 0, "Future fight cannot skip progression", failures)
 	store.record_win("bank", "prologue_1", "rico")
@@ -80,11 +84,47 @@ static func run() -> Array:
 	var panels: Array = StoryData.scenes().gate.panels
 	_check(panels[1].text == "Free or forgotten, brothers — that's the whole menu." and not panels[1].silhouette, "Smash voice appears unseen with exact line", failures)
 	_check(panels[3].silhouette and panels[4].text == "Win it all back — or join the quiet ones.", "Silhouette follows voice and preserves second locked line", failures)
+	_test_legacy_health_scale(path + ".legacy", failures)
 	for suffix in ["", ".bak", ".tmp", ".corrupt"]:
 		if FileAccess.file_exists(path + suffix):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path + suffix))
 	print("Progression: %d checks, %d failures." % [checks, failures.size()])
 	return failures
+
+static func _test_legacy_health_scale(path: String, failures: Array) -> void:
+	# Exact version-1 shape: health upgrades were always counts, never HP.
+	var legacy: Dictionary = {
+		"version": 1,
+		"settings": {"layout": "simplified", "subtitles": true, "muted": false, "portrait_fights": false, "tester_bypass": false},
+		"fighters": {
+			"cin": {"points": 5, "upgrades": {"hp": 3, "damage": 1, "speed": 0}},
+			"rico": {"points": 0, "upgrades": {"hp": 0, "damage": 0, "speed": 0}},
+			"hood": {"points": 7, "upgrades": {"hp": 4, "damage": 0, "speed": 2}},
+			"bank": {"points": 0, "upgrades": {"hp": 0, "damage": 0, "speed": 0}},
+		},
+		"story": {"current": 1, "seen": {"gate": true}, "completed": {"prologue_0": true}, "unlocked_chapters": ["bank"], "attempts": {"prologue_1": {"period": 0, "used": 2}}},
+	}
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(legacy))
+	file.close()
+	var loaded = SaveStore.new()
+	_check(loaded.load_save(path) and loaded.data.version == 1, "Existing version-1 saves load without a schema migration", failures)
+	_check(loaded.data.fighters == legacy.fighters and loaded.data.story == legacy.story and loaded.data.settings == legacy.settings, "Legacy purchases, balances, settings, attempts and story progress retain their values", failures)
+	var quote: Dictionary = loaded.quote_upgrade("cin", "hp")
+	_check(quote.allowed and quote.before == "230 HP" and quote.after == "240 HP" and quote.cost == 1, "Legacy health counts quote the corresponding larger pool", failures)
+	_check(not loaded.quote_upgrade("hood", "hp").allowed and loaded.quote_upgrade("hood", "hp").before == "250 HP", "Big Hood retains his four-purchase health ceiling", failures)
+	var sim = Sim.new()
+	sim.setup("cin", "hood", loaded.get_upgrades("cin"), loaded.get_upgrades("hood"))
+	_check(sim.fighters[0].max_hp == 230 and sim.fighters[1].max_hp == 250, "Legacy health counts apply to the real story combat pools", failures)
+	_check(sim.fighters[0].damage_rank == 2 and sim.fighters[1].speed_rank == 2, "Legacy class upgrades apply in combat", failures)
+	_check(loaded.begin_attempt("prologue_1", 1) and loaded.attempts_remaining("prologue_1", 1) == 0, "Legacy attempt usage continues at the existing limit", failures)
+	loaded.record_win("cin", "prologue_1", "rico")
+	_check(loaded.data.story.current == 2 and loaded.get_points("cin") == 6 and "rico" in loaded.data.story.unlocked_chapters, "A legacy save continues story progression and awards the next win", failures)
+	var reloaded = SaveStore.new()
+	_check(reloaded.load_save(path) and reloaded.get_upgrades("cin").hp == 3 and reloaded.get_upgrades("hood").hp == 4 and reloaded.has_seen("gate"), "Continuing a legacy save preserves original purchase counts and seen scenes on disk", failures)
+	for suffix in ["", ".bak", ".tmp", ".corrupt"]:
+		if FileAccess.file_exists(path + suffix):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path + suffix))
 
 static func _grant_point(store, id: String) -> bool:
 	store.data.fighters[id].points += 1

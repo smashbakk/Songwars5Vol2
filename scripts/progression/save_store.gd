@@ -5,11 +5,13 @@ extends RefCounted
 
 const VERSION := 1
 const FIGHTERS := ["cin", "rico", "hood", "bank"]
+const HEALTH_STEP := 10
+const HEALTH_CAP := 250
 const BASE := {
-	"cin": {"hp": 100, "damage": 1, "speed": 2},
-	"rico": {"hp": 100, "damage": 1, "speed": 1},
-	"hood": {"hp": 105, "damage": 2, "speed": 0},
-	"bank": {"hp": 100, "damage": 1, "speed": 1},
+	"cin": {"hp": 200, "damage": 1, "speed": 2},
+	"rico": {"hp": 200, "damage": 1, "speed": 1},
+	"hood": {"hp": 210, "damage": 2, "speed": 0},
+	"bank": {"hp": 200, "damage": 1, "speed": 1},
 }
 const DAMAGE_NAMES := ["Light", "Standard", "Power"]
 const SPEED_NAMES := ["Slow", "Standard", "Fast"]
@@ -84,7 +86,9 @@ func _sanitize(raw: Dictionary) -> Dictionary:
 		clean.fighters[id].points = _safe_int(entry.get("points", 0), 0, 1000000)
 		var upgrades = entry.get("upgrades", {})
 		if upgrades is Dictionary:
-			clean.fighters[id].upgrades.hp = _safe_int(upgrades.get("hp", 0), 0, (125 - int(BASE[id].hp)) / 5)
+			# Saves store purchased steps, so the larger health pool keeps every
+			# existing purchase and the same number of available upgrades.
+			clean.fighters[id].upgrades.hp = _safe_int(upgrades.get("hp", 0), 0, (HEALTH_CAP - int(BASE[id].hp)) / HEALTH_STEP)
 			clean.fighters[id].upgrades.damage = _safe_int(upgrades.get("damage", 0), 0, 2 - int(BASE[id].damage))
 			clean.fighters[id].upgrades.speed = _safe_int(upgrades.get("speed", 0), 0, 2 - int(BASE[id].speed))
 	var story: Dictionary = raw.story
@@ -182,12 +186,12 @@ func quote_upgrade(id: String, stat: String) -> Dictionary:
 	if not id in FIGHTERS or not stat in ["hp", "damage", "speed"]:
 		return quote
 	var steps := int(data.fighters[id].upgrades[stat])
-	var current := int(BASE[id][stat]) + steps * (5 if stat == "hp" else 1)
-	var ceiling := 125 if stat == "hp" else 2
+	var current := int(BASE[id][stat]) + steps * (HEALTH_STEP if stat == "hp" else 1)
+	var ceiling := HEALTH_CAP if stat == "hp" else 2
 	quote.cost = 1 if stat == "hp" else 3
 	if stat == "hp":
 		quote.before = "%d HP" % current
-		quote.after = "%d HP" % mini(current + 5, 125)
+		quote.after = "%d HP" % mini(current + HEALTH_STEP, HEALTH_CAP)
 	else:
 		var labels: Array = DAMAGE_NAMES if stat == "damage" else SPEED_NAMES
 		quote.before = labels[current]

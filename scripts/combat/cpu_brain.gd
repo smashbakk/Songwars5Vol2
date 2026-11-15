@@ -1,7 +1,7 @@
 # Property of LiveLayer Technology LLC.
 extends RefCounted
 
-const ATTACK_RANGES = {"light": 108, "low": 115, "kick": 140, "heavy": 165}
+const ATTACK_RANGES = {"light": 108, "low": 115, "kick": 140, "heavy": 165, "uppercut": 120}
 
 # One deterministic brain. Difficulty changes reaction, defense and execution;
 # the opponent's remaining health never changes its behavior.
@@ -116,10 +116,16 @@ func decide(sim, index: int) -> Dictionary:
 	var foe_move: String = str(foe.get("move", ""))
 	var foe_state: String = str(foe.get("state", "idle"))
 	var danger: bool = foe_state in ["attack", "minor", "big_start", "big", "throw_hold"] or not foe_move.is_empty()
-	if danger and distance < 240 and _random(100) < [20, 46, 75][difficulty]:
+	var ready: bool = int(me.get("stun", 0)) <= 0 and (state in ["idle", "walk", "crouch", "jump"] or bool(me.get("can_cancel", false)))
+	var uppercut_reach: int = int(int(ATTACK_RANGES.uppercut) * int(me.get("reach_percent", 100)) / 100)
+	var jump_in: bool = int(foe["y"]) > 0 and int(foe["y"]) <= 170 and (int(foe["x"]) - int(me["x"])) * int(me["facing"]) > 0
+	if ready and int(me["y"]) == 0 and jump_in and distance <= uppercut_reach:
+		result["attack"] = "heavy"
+		result["down"] = true
+	elif danger and distance < 240 and _random(100) < [20, 46, 75][difficulty]:
 		result["move"] = -toward
 		result["block"] = true
-		result["down"] = foe_move in ["low", "heavy"] if _random(100) < [35, 65, 90][difficulty] else _random(2) == 0
+		result["down"] = bool(foe.get("attack_low", false)) if _random(100) < [35, 65, 90][difficulty] else _random(2) == 0
 	elif int(me["meter"]) >= 60 and _random(100) < [18, 36, 58][difficulty] and not foe_state in ["down", "getup"]:
 		result["attack"] = "special"
 		result["move"] = toward
@@ -131,18 +137,23 @@ func decide(sim, index: int) -> Dictionary:
 	elif distance < 175:
 		var attacks: Array = ["light", "low", "kick", "heavy"]
 		var chosen: String = attacks[_random(attacks.size())]
-		var reach: int = int(int(ATTACK_RANGES[chosen]) * int(me.get("reach_percent", 100)) / 100)
+		var ranged_move: String = "uppercut" if chosen == "heavy" and state == "crouch" else chosen
+		var reach: int = int(int(ATTACK_RANGES[ranged_move]) * int(me.get("reach_percent", 100)) / 100)
 		# Commit only inside the selected attack's reach: starting an attack
 		# prevents walking, so repeated out-of-range jabs would never close.
 		if distance > reach - 8:
 			result["move"] = toward
 		else:
 			result["attack"] = chosen
-			result["down"] = chosen in ["low", "heavy"]
+			result["down"] = chosen == "low"
 	else:
 		result["move"] = toward
-		if distance > 250 and _random(100) < [8, 14, 20][difficulty]:
+		if int(me["y"]) == 0 and not bool(me.get("prev_jump", false)) and distance > 250 and _random(100) < [8, 14, 20][difficulty]:
 			result["jump"] = true
+	# A second jump is a deliberate fresh press, with a small chance at each
+	# normal reaction interval. Launches caused by an uppercut are ineligible.
+	if ready and state == "jump" and int(me["y"]) > 0 and bool(me.get("normal_jump", false)) and not bool(me.get("double_jump_used", false)) and not bool(me.get("prev_jump", false)) and str(result["attack"]).is_empty():
+		result["jump"] = _random(100) < [6, 10, 14][difficulty]
 	intent = result.duplicate(true)
 	intent["attack"] = ""
 	intent["jump"] = false

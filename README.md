@@ -25,11 +25,12 @@ godot4 --path . --log-file "$PWD/work/play.log" -- --save-path=res://work/play_s
 
 - Four selectable fighters: **Cin City, Rico Ruffino, Big Hood Tha King, Bank Sinatra**, including mirror matches and Cin City's independently targetable dog sharing her health.
 - The **Rooftop** arena, drawn with temporary illustrated shapes and distinct fighter poses.
-- Manual attacks and cancels, high/low blocking, timed blocks, chip damage, three-notch meter, prompted minor and big specials, throws and throw breaks, air steering, knockdown/get-up protection, hitstop, and the five-hit rule. Damage stays unscaled.
+- Manual attacks and cancels, crouching uppercuts, double jumps, high/low blocking, timed blocks, chip damage, three-notch meter, prompted minor and big specials, throws and throw breaks, air steering, knockdown/get-up protection, hitstop, and the five-hit rule. Combo hits keep full damage.
+- Base health is **200 HP** (**210** for Big Hood); the health label and bar show the real pool. Standard regular attacks deal **6 / 8 / 10 / 14 / 16** for light / low / kick / heavy / uppercut. Specials and throws use reduced percentages of the larger pool.
 - Best-of-three CPU matches, 99-second rounds, round countdowns, and Easy/Standard/Hard settings for one seeded CPU brain.
 - Free training with reset, full starting meter, idle/guard/CPU dummy choices, and three short practice challenges: Move & Block, Combos & the 5-Hit Rule, and Survive the Big Special.
 - The complete three-fight **Prologue**: Bank → Rico → Big Hood. Story panels follow the supplied script; the ending presents Smash's unseen voice before his silhouette and preserves both locked lines. Text stands in for recorded voices.
-- Local story progress, per-match attempts, seen scenes, chapter unlock flags, fighter-specific upgrade points, and confirmed purchases. Health costs one point per +5 HP, damage/speed cost three per class; ceilings are 125 HP, Power, and Fast. Upgrades apply only in Story. Replay wins also earn a point.
+- Local story progress, per-match attempts, seen scenes, chapter unlock flags, fighter-specific upgrade points, and confirmed purchases. Health costs one point per +10 HP, damage/speed cost three per class; ceilings are 250 HP, Power, and Fast. Existing saves keep their purchased upgrade counts. Upgrades apply only in Story. Replay wins also earn a point.
 
 Story attempts reset in fixed **00:00/12:00 UTC** device-clock periods for this offline pass. Switching fighter does not reset a match's allowance. Settings includes an explicit tester bypass; CPU and training stay available when attempts run out.
 
@@ -39,14 +40,17 @@ Art, story panels, and hit tones are placeholders. There are no fabricated fight
 
 ## Controls
 
-Touch uses an eight-direction pad plus the selected layout. Simplified has Punch/Kick; hold Down for low punch/heavy kick. Traditional exposes four attacks, Throw, and Special. A prompted attack also gets a dedicated touch target. HOLD BLOCK is available in both layouts.
+Touch uses an eight-direction pad plus the selected layout. Simplified has Punch/Kick; hold Down for low punch/uppercut. Traditional exposes four attacks, Throw, and Special; Down + Heavy performs an uppercut. A prompted attack also gets a dedicated touch target. HOLD BLOCK is available in both layouts.
+
+Uppercuts launch opponents no higher than a normal jump (110 units). Only a fighter's own jump permits a double jump; an uppercut launch must land first. A fresh second jump reaches 160 units, with air steering and attacks available throughout.
 
 | Keyboard | Action |
 |---|---|
-| WASD / arrow keys | Walk, crouch, jump; steer in the air |
+| WASD / arrow keys | Walk, crouch, jump; release and press Up again in the air for one higher double jump; steer in the air |
 | J / U | Light punch / low punch |
 | K / I | Kick / heavy kick |
-| Down + J/K in Simplified | Low punch / heavy kick |
+| Down + I | Uppercut in either layout |
+| Down + J/K in Simplified | Low punch / uppercut |
 | Space | Hold Block; tap and keep holding when defending a big special |
 | L | Throw shortcut |
 | O | Special prompt shortcut; hold Back for minor, Forward for big |
@@ -58,7 +62,7 @@ Back and Forward are relative to your fighter's facing. Hold Back to block high;
 
 Double-tap **Back** with one notch for a minor prompt, or **Forward** with three for a big prompt; press the shown attack within two seconds. A missed minor prompt costs nothing; a missed big prompt costs one notch. Big-special defense requires a new Block press and a sustained hold; jumping before capture can evade it.
 
-Throw with **Back → Forward → Punch** at close range while holding at least one notch, or use the shortcut. Throws hold rather than spend meter and deal 10/15/20 damage. While grabbed, input **Back → Back → Down** within 0.6 seconds to break free.
+Throw with **Back → Forward → Punch** at close range while holding at least one notch, or use the shortcut. Throws hold rather than spend meter and deal 16/22/30 damage. While grabbed, input **Back → Back → Down** within 0.6 seconds to break free.
 
 ## Automated checks
 
@@ -80,11 +84,13 @@ Both commands exit with status 0 on success. Progression tests and UI smoke save
 
 | Suite | Checks |
 |---|---|
-| Fight simulation | Roster values, attack startup/damage, held/timed and high/low blocks, chip, meter, special molds and splits, big defense/release/evade, throws/breaks/whiffs, five-hit knockdown, dog/shared-health behavior, movement, simultaneous contacts, round rules, CPU behavior, seeded replay and snapshot restoration |
-| Progression | Fighter-specific earnings/spending, replay rewards, upgrade quotes/caps, save reload, backup recovery and corrupt data bounds, attempt limits/reset/bypass, sequential progression, chapter unlocks, locked lineups and exact ending dialogue |
+| Fight simulation | Roster values, attack startup/damage, uppercut anti-air and launch, double-jump limits and landing reset, held/timed and high/low blocks, chip, meter, special molds and splits, big defense/release/evade, throws/breaks/whiffs, five-hit knockdown, dog/shared-health behavior, movement, simultaneous contacts, round rules, CPU behavior, damage pacing against the old table, seeded replay and snapshot restoration |
+| Progression | Fighter-specific earnings/spending, replay rewards, upgrade quotes/caps, legacy save health scaling and story continuation, save reload, backup recovery and corrupt data bounds, attempt limits/reset/bypass, sequential progression, chapter unlocks, locked lineups and exact ending dialogue |
 | UI smoke | First-run layout, all four selections, CPU stepping, pause, training, multitouch/layout mappings, story panels/results/upgrades, gate staging, disk reload, and screen/control bounds in landscape/portrait phone and desktop sizes |
 
 The smoke test invokes the real menus and simulation. Its story-result fixtures exercise progression wiring; fight outcomes and combat rules are tested separately by the simulation suite.
+
+The damage pacing regression compares identical seeded CPU matchups using the new table and the old percentages normalized to 200 HP. Across 54 rounds per table, current CPU rounds average about 15.9 seconds versus 12.6 seconds before. The clean-heavy barrage takes 15 hits / 9.30 seconds versus 12 hits / 7.35 seconds. These prescribed damage values increase round length but do not yet produce the intended 45–75-second CPU rounds.
 
 ## Simulation contract
 
