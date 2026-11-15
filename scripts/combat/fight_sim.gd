@@ -496,7 +496,7 @@ func _hit_regular(i: int, move_name: String, dog: bool, target_dog: bool = false
 		return
 	var was_stunned: bool = str(target.state) == "stunned"
 	var data: Dictionary = MOVE_DATA[move_name]
-	var damage: int = 6 if dog else int(data.damage) + (int(f.damage_rank) - 1) * 2
+	var damage: int = 2 if dog else int(data.damage) + (int(f.damage_rank) - 1) * 2
 	var low: bool = dog or bool(f.attack_low)
 	var blocked: bool = _guard_matches(target, low) and not target_dog
 	if blocked:

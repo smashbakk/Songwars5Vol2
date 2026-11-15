@@ -168,11 +168,16 @@ func _hud_checks() -> void:
 	var previous_hp: int = target.hp
 	target.hp = target.max_hp
 	game._update_hud()
-	_check(target.max_hp == 200 and game.health_labels[1].text.contains("200/200"), "health label shows the real 200 HP pool")
+	var label_text: String = game.health_labels[1].text
+	var has_digit: bool = false
+	for ch in label_text:
+		if ch >= "0" and ch <= "9":
+			has_digit = true
+	_check(target.max_hp == 200 and not has_digit, "health label shows name and pips only, never the numeric HP pool (CEO ruling)")
 	_check(game.health_bars[1].max_value == 200 and game.health_bars[1].value == 200, "health bar uses the real 200 HP pool")
 	target.hp -= 14
 	game._update_hud()
-	_check(game.health_labels[1].text.contains("186/200"), "heavy damage displays the true remaining pool")
+	_check(not game.health_labels[1].text.contains("186") and not game.health_labels[1].text.contains("/"), "heavy damage never reveals the numeric pool in the label")
 	_check(is_equal_approx(game.health_bars[1].value / game.health_bars[1].max_value, 0.93), "clean heavy drains exactly seven percent of the health bar")
 	target.hp = previous_hp
 	var before:Dictionary=game.sim.snapshot()
@@ -300,6 +305,34 @@ func _touch_checks() -> void:
 		_check(touch.sample().attack=="",layout+" simultaneous taps do not queue a future string")
 		touch.clear()
 
+func _front_door_checks() -> void:
+	# The front door (CEO-approved startup flow): roster and select must show
+	# every launch fighter's REAL portrait — a placeholder is a defect.
+	game.show_roster()
+	await _settle()
+	_check(game.screen == "roster", "roster screen opens from the front door")
+	var portraits := 0
+	for node in _nodes(game.ui):
+		if node is TextureRect and node.texture != null and str(node.texture.resource_path).contains("portrait_"):
+			portraits += 1
+	_check(portraits == 8, "roster shows all eight real portraits (saw %d)" % portraits)
+	game.mode = "cpu"
+	game.select_opponent = false
+	game.show_select()
+	await _settle()
+	portraits = 0
+	for node in _nodes(game.ui):
+		if node is TextureRect and node.texture != null and str(node.texture.resource_path).contains("portrait_"):
+			portraits += 1
+	_check(portraits == 8, "character select shows all eight real portraits (saw %d)" % portraits)
+	game.show_new_additions()
+	await _settle()
+	_check(game.screen == "new_additions", "new additions slot opens")
+	await _press("Browse the Roster")
+	_check(game.screen == "roster", "new additions leads into the roster")
+	game.show_menu()
+	await _settle()
+
 func _run() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--save-path="):
@@ -317,10 +350,18 @@ func _run() -> void:
 	root.add_child(game)
 	game.set_physics_process(false)
 	await _settle()
+	_check(game.screen == "boot", "game boots into the loading board")
+	var boot_guard := 0
+	while game.screen == "boot" and boot_guard < 20000:
+		await process_frame
+		boot_guard += 1
+	_check(game.screen == "press_start", "loading board finishes into press start")
+	await _press("PRESS START")
 	_check(game.screen == "layout", "first launch requires explicit layout")
 	await _press("SIMPLIFIED")
 	_check(game.screen == "menu" and game.store.data.settings.layout == "simplified", "layout selection saves and opens menu")
 	_fits("landscape menu")
+	await _front_door_checks()
 	game.show_help()
 	await _settle()
 	_check(game.screen == "help", "move guide opens")
@@ -338,7 +379,7 @@ func _run() -> void:
 		game.show_select()
 		await _settle()
 		await _press(Data.get_fighter(id).name)
-		_check(game.selected == id and game.select_opponent, "all four fighter choices work: " + id)
+		_check(game.selected == id and game.select_opponent, "every fighter choice works: " + id)
 		game.select_opponent = false
 	game.selected = "cin"
 	game.opponent = "bank"

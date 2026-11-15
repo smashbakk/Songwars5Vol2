@@ -109,7 +109,11 @@ static func _test_legacy_health_scale(path: String, failures: Array) -> void:
 	file.close()
 	var loaded = SaveStore.new()
 	_check(loaded.load_save(path) and loaded.data.version == 1, "Existing version-1 saves load without a schema migration", failures)
-	_check(loaded.data.fighters == legacy.fighters and loaded.data.story == legacy.story and loaded.data.settings == legacy.settings, "Legacy purchases, balances, settings, attempts and story progress retain their values", failures)
+	var retained := true
+	for id in legacy.fighters:
+		retained = retained and loaded.data.fighters.get(id) == legacy.fighters[id]
+	_check(retained and loaded.data.story == legacy.story and loaded.data.settings == legacy.settings, "Legacy purchases, balances, settings, attempts and story progress retain their values", failures)
+	_check(loaded.data.fighters.size() == 8 and int(loaded.data.fighters["smash"]["points"]) == 0 and int(loaded.data.fighters["hublo"]["points"]) == 0, "Roster expansion adds fresh entries without touching legacy progress", failures)
 	var quote: Dictionary = loaded.quote_upgrade("cin", "hp")
 	_check(quote.allowed and quote.before == "230 HP" and quote.after == "240 HP" and quote.cost == 1, "Legacy health counts quote the corresponding larger pool", failures)
 	_check(not loaded.quote_upgrade("hood", "hp").allowed and loaded.quote_upgrade("hood", "hp").before == "250 HP", "Big Hood retains his four-purchase health ceiling", failures)

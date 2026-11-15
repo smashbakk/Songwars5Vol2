@@ -4,7 +4,7 @@ extends RefCounted
 ## device-clock substitute for the future authoritative server reset periods.
 
 const VERSION := 1
-const FIGHTERS := ["cin", "rico", "hood", "bank"]
+const FIGHTERS := ["cin", "rico", "hood", "bank", "smash", "jo", "lmscurt", "hublo"]
 const HEALTH_STEP := 10
 const HEALTH_CAP := 250
 const BASE := {
@@ -12,6 +12,10 @@ const BASE := {
 	"rico": {"hp": 200, "damage": 1, "speed": 1},
 	"hood": {"hp": 210, "damage": 2, "speed": 0},
 	"bank": {"hp": 200, "damage": 1, "speed": 1},
+	"smash": {"hp": 200, "damage": 1, "speed": 2},
+	"jo": {"hp": 200, "damage": 1, "speed": 2},
+	"lmscurt": {"hp": 200, "damage": 1, "speed": 1},
+	"hublo": {"hp": 200, "damage": 1, "speed": 1},
 }
 const DAMAGE_NAMES := ["Light", "Standard", "Power"]
 const SPEED_NAMES := ["Slow", "Standard", "Fast"]

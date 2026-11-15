@@ -8,11 +8,27 @@ const SaveStore = preload("res://scripts/progression/save_store.gd")
 const Story = preload("res://scripts/progression/story_data.gd")
 const Arena = preload("res://scripts/ui/arena_view.gd")
 const Touch = preload("res://scripts/ui/touch_controls.gd")
+const PORTRAITS = {
+	"cin": "res://assets/menu/portrait_cin.jpg",
+	"rico": "res://assets/menu/portrait_rico.jpg",
+	"hood": "res://assets/menu/portrait_hood.png",
+	"bank": "res://assets/menu/portrait_bank.jpg",
+	"smash": "res://assets/menu/portrait_smash.jpg",
+	"jo": "res://assets/menu/portrait_jo.jpg",
+	"lmscurt": "res://assets/menu/portrait_lmscurt.jpg",
+	"hublo": "res://assets/menu/portrait_hublo.png",
+}
+const BOARD_VIDEO := "res://assets/menu/loading-board.ogv"
+const BOARD_STILL := "res://assets/menu/board-still.jpg"
+const TITLE_LOGO := "res://assets/menu/vol2-title-logo.png"
+const ROOFTOP_ART := "res://assets/menu/rooftop-night.jpg"
+const STATUE_SHADER := "shader_type canvas_item;\nvoid fragment() {\n\tvec4 c = texture(TEXTURE, UV);\n\tfloat g = dot(c.rgb, vec3(0.299, 0.587, 0.114));\n\tvec3 statue = mix(vec3(g), c.rgb, 0.22) * vec3(0.5, 0.62, 1.05);\n\tCOLOR = vec4(statue, c.a);\n}"
 const TEAL = Color("53ebc5")
 const GOLD = Color("ffd18a")
 const INK = Color("0c1329")
 const PALE = Color("e7ecff")
 const MUTED = Color("a1adcc")
+const HEALTH_NAMES := ["Standard", "Tough", "Rugged", "Hardened", "Fortified", "Unbreakable"]
 
 var store = SaveStore.new()
 var arena: Control
@@ -50,6 +66,16 @@ var scene_continue: Button
 var pending_result := false
 var audio_player: AudioStreamPlayer
 var relayout_pending := false
+var menu_textures: Dictionary = {}
+var boot_elapsed := 0.0
+var boot_ready := false
+var boot_skip := false
+var boot_bar: ProgressBar
+var boot_pct: Label
+var boot_player: VideoStreamPlayer
+var boot_still: TextureRect
+var press_elapsed := 0.0
+var press_button: Button
 
 func _ready() -> void:
 	# Godot CLI can override the save file for isolated smoke tests, without changing the environment.
@@ -70,10 +96,7 @@ func _ready() -> void:
 	get_tree().root.size_changed.connect(_window_resized)
 	resized.connect(_request_relayout)
 	_window_resized()
-	if str(store.data.settings.get("layout", "")).is_empty():
-		show_layout(true)
-	else:
-		show_menu()
+	show_boot()
 
 func _setup_theme() -> void:
 	var t := Theme.new()
@@ -172,19 +195,367 @@ func row(parent: Node) -> HBoxContainer:
 	parent.add_child(h)
 	return h
 
+func cap(parent: Node, value: String, small: bool = false) -> PanelContainer:
+	var b := StyleBoxFlat.new()
+	b.bg_color = Color(0.10, 0.14, 0.27, 1.0)
+	b.border_color = Color("7d8fc4")
+	b.set_border_width_all(1)
+	b.set_corner_radius_all(8)
+	b.content_margin_left = 7 if small else 9
+	b.content_margin_right = 7 if small else 9
+	b.content_margin_top = 3
+	b.content_margin_bottom = 3
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", b)
+	var l := Label.new()
+	l.text = value
+	l.add_theme_font_size_override("font_size", 14 if small else 15)
+	l.add_theme_color_override("font_color", PALE)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	p.add_child(l)
+	parent.add_child(p)
+	return p
+
+func cap_label(parent: Node, value: String, color: Color = PALE) -> Label:
+	var l := Label.new()
+	l.text = value
+	l.add_theme_font_size_override("font_size", 15)
+	l.add_theme_color_override("font_color", color)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	parent.add_child(l)
+	return l
+
+func guide_row(parent: Node) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	parent.add_child(h)
+	return h
+
+func guide_pair(parent: Node) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(h)
+	return h
+
+func chain_sep(parent: Node) -> void:
+	var l := Label.new()
+	l.text = "→"
+	l.add_theme_font_size_override("font_size", 14)
+	l.add_theme_color_override("font_color", MUTED)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	parent.add_child(l)
+
+func guide_panel(parent: Node, title: String) -> VBoxContainer:
+	var b := StyleBoxFlat.new()
+	b.bg_color = Color(0.05, 0.075, 0.16, 0.92)
+	b.border_color = Color("2c3c66")
+	b.set_border_width_all(1)
+	b.set_corner_radius_all(14)
+	b.content_margin_left = 14
+	b.content_margin_right = 14
+	b.content_margin_top = 6
+	b.content_margin_bottom = 6
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", b)
+	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	p.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	p.add_child(v)
+	var head := Label.new()
+	head.text = title
+	head.add_theme_font_size_override("font_size", 16)
+	head.add_theme_color_override("font_color", TEAL)
+	v.add_child(head)
+	return v
+
+func stat_level(stat: String) -> Dictionary:
+	var ups := store.get_upgrades(selected)
+	var steps := int(ups[stat])
+	var base: Dictionary = SaveStore.BASE[selected]
+	var now_name := ""
+	var next_name := ""
+	var total := 0
+	if stat == "hp":
+		var pool := int(base["hp"]) + steps * SaveStore.HEALTH_STEP
+		total = (SaveStore.HEALTH_CAP - int(base["hp"])) / SaveStore.HEALTH_STEP
+		now_name = HEALTH_NAMES[clampi((pool - 200) / 10, 0, HEALTH_NAMES.size() - 1)]
+		next_name = HEALTH_NAMES[clampi((pool + SaveStore.HEALTH_STEP - 200) / 10, 0, HEALTH_NAMES.size() - 1)]
+	else:
+		var names: Array = SaveStore.DAMAGE_NAMES if stat == "damage" else SaveStore.SPEED_NAMES
+		var idx := int(base[stat]) + steps
+		total = 2 - int(base[stat])
+		now_name = names[clampi(idx, 0, 2)]
+		next_name = names[clampi(idx + 1, 0, 2)]
+	var pips := ""
+	for i in total:
+		pips += "●" if i < steps else "○"
+	return {"now": now_name, "next": next_name, "pips": pips, "maxed": steps >= total}
+
+func _boot_paths() -> Array:
+	var paths: Array = [BOARD_VIDEO, BOARD_STILL, TITLE_LOGO, ROOFTOP_ART]
+	for id in Data.IDS:
+		paths.append(PORTRAITS[id])
+	return paths
+
+func show_boot() -> void:
+	clear_ui("boot")
+	boot_elapsed = 0.0
+	boot_ready = false
+	boot_skip = false
+	for path in _boot_paths():
+		ResourceLoader.load_threaded_request(path)
+	var bg := ColorRect.new()
+	bg.color = INK
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(bg)
+	boot_still = TextureRect.new()
+	boot_still.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	boot_still.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	boot_still.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	boot_still.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(boot_still)
+	boot_player = VideoStreamPlayer.new()
+	boot_player.expand = true
+	boot_player.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	boot_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(boot_player)
+	var bottom := MarginContainer.new()
+	bottom.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom.offset_left = 60
+	bottom.offset_right = -60
+	bottom.offset_top = -128
+	bottom.offset_bottom = -20
+	ui.add_child(bottom)
+	var col := VBoxContainer.new()
+	bottom.add_child(col)
+	boot_pct = text(col, "0%", 16, PALE)
+	boot_pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boot_bar = ProgressBar.new()
+	boot_bar.min_value = 0
+	boot_bar.max_value = 100
+	boot_bar.value = 0
+	boot_bar.show_percentage = false
+	boot_bar.custom_minimum_size.y = 14
+	boot_bar.add_theme_stylebox_override("background", box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.30), 7))
+	boot_bar.add_theme_stylebox_override("fill", box(Color(0.36, 0.85, 1.0, 0.55), Color(0.7, 0.95, 1.0, 0.5), 7))
+	col.add_child(boot_bar)
+	var pill_row := CenterContainer.new()
+	col.add_child(pill_row)
+	var pill := PanelContainer.new()
+	pill.add_theme_stylebox_override("panel", box(Color(0.05, 0.10, 0.20, 0.45), Color(0.33, 0.92, 0.77, 0.6), 14))
+	pill_row.add_child(pill)
+	var pill_label := Label.new()
+	pill_label.text = "Powered By LiveLayerTech.net"
+	pill_label.add_theme_font_size_override("font_size", 14)
+	pill_label.add_theme_color_override("font_color", TEAL)
+	pill.add_child(pill_label)
+	var skip := button(col, "Tap to skip", func(): boot_skip = true)
+	skip.custom_minimum_size.y = 34
+
+func _boot_tick(delta: float) -> void:
+	boot_elapsed += delta
+	var paths := _boot_paths()
+	var settled := 0.0
+	var all_loaded := true
+	for path in paths:
+		var progress: Array = []
+		var status := ResourceLoader.load_threaded_get_status(path, progress)
+		if status == ResourceLoader.THREAD_LOAD_LOADED:
+			settled += 1.0
+		elif status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			all_loaded = false
+			settled += float(progress[0]) if not progress.is_empty() else 0.0
+		else:
+			settled += 1.0
+	var fraction := settled / float(paths.size())
+	if is_instance_valid(boot_bar):
+		boot_bar.value = fraction * 100.0
+		if is_instance_valid(boot_pct):
+			boot_pct.text = "%d%%" % int(fraction * 100.0)
+	if all_loaded and not boot_ready:
+		boot_ready = true
+		for path in paths:
+			var res := ResourceLoader.load_threaded_get(path)
+			if res == null:
+				push_warning("FRONT DOOR DEFECT: asset failed to load: " + path)
+			else:
+				menu_textures[path] = res
+		if menu_textures.has(BOARD_VIDEO) and is_instance_valid(boot_player):
+			boot_player.stream = menu_textures[BOARD_VIDEO]
+			boot_player.play()
+		elif is_instance_valid(boot_still):
+			boot_still.texture = menu_textures.get(BOARD_STILL)
+	if boot_elapsed >= 5.0 and not boot_ready:
+		boot_ready = true
+		for path in paths:
+			if ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_LOADED:
+				menu_textures[path] = ResourceLoader.load_threaded_get(path)
+	if boot_ready and (boot_elapsed >= 3.0 or boot_skip):
+		show_press_start()
+
+func show_press_start() -> void:
+	clear_ui("press_start")
+	press_elapsed = 0.0
+	var bg := ColorRect.new()
+	bg.color = INK
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(bg)
+	var tap := Button.new()
+	tap.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tap.focus_mode = Control.FOCUS_NONE
+	for state_name in ["normal", "hover", "pressed", "focus"]:
+		tap.add_theme_stylebox_override(state_name, box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0))
+	tap.pressed.connect(_advance_press_start)
+	ui.add_child(tap)
+	var statues := HBoxContainer.new()
+	statues.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	statues.offset_left = 24
+	statues.offset_right = -24
+	statues.offset_top = 180
+	statues.offset_bottom = -110
+	statues.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	statues.add_theme_constant_override("separation", 10)
+	ui.add_child(statues)
+	var sh := Shader.new()
+	sh.code = STATUE_SHADER
+	for id in ["smash", "jo", "rico", "lmscurt"]:
+		var t := TextureRect.new()
+		t.texture = _menu_texture(PORTRAITS[id])
+		t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var mat := ShaderMaterial.new()
+		mat.shader = sh
+		t.material = mat
+		statues.add_child(t)
+	var top := CenterContainer.new()
+	top.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	top.offset_top = 14
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(top)
+	var logo := TextureRect.new()
+	logo.texture = _menu_texture(TITLE_LOGO)
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.custom_minimum_size = Vector2(620, 290)
+	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.add_child(logo)
+	var bottom := CenterContainer.new()
+	bottom.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom.offset_top = -100
+	bottom.offset_bottom = -24
+	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(bottom)
+	press_button = Button.new()
+	press_button.text = "PRESS START"
+	press_button.focus_mode = Control.FOCUS_NONE
+	press_button.add_theme_font_size_override("font_size", 36)
+	press_button.add_theme_color_override("font_color", GOLD)
+	for state_name in ["normal", "hover", "pressed", "focus"]:
+		press_button.add_theme_stylebox_override(state_name, box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0))
+	press_button.pressed.connect(_advance_press_start)
+	bottom.add_child(press_button)
+
+func _advance_press_start() -> void:
+	if str(store.data.settings.get("layout", "")).is_empty():
+		show_layout(true)
+	else:
+		show_menu()
+
+func _menu_texture(path: String) -> Texture2D:
+	var tex: Texture2D = menu_textures.get(path)
+	if tex == null and ResourceLoader.exists(path):
+		tex = load(path)
+	return tex
+
+func _menu_backdrop() -> void:
+	var tex := _menu_texture(ROOFTOP_ART)
+	if tex == null:
+		return
+	var t := TextureRect.new()
+	t.texture = tex
+	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	t.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	t.modulate = Color(0.55, 0.6, 0.8, 1)
+	ui.add_child(t)
+
+func _portrait_rect(id: String, height: float) -> Control:
+	var tex := _menu_texture(PORTRAITS.get(id, ""))
+	if tex != null:
+		var t := TextureRect.new()
+		t.texture = tex
+		t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		t.custom_minimum_size.y = height
+		t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return t
+	var info: Dictionary = Data.get_fighter(id)
+	var rect := ColorRect.new()
+	rect.color = Color(info.color) * Color(0.4, 0.4, 0.4, 1)
+	rect.custom_minimum_size.y = height
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var mark := Label.new()
+	mark.text = str(info.name).substr(0, 1)
+	mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mark.add_theme_font_size_override("font_size", 38)
+	mark.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	rect.add_child(mark)
+	return rect
+
+func show_roster() -> void:
+	clear_ui("roster")
+	_menu_backdrop()
+	var col := page("Explore the Artists", "ROSTER / EIGHT FIGHTERS")
+	var grid := GridContainer.new()
+	grid.columns = 2 if size.x > 600 else 1
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	col.add_child(grid)
+	for id in Data.IDS:
+		var info: Dictionary = Data.get_fighter(id)
+		var card := VBoxContainer.new()
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(card)
+		card.add_child(_portrait_rect(id, 120))
+		text(card, str(info.name), 22)
+		text(card, "%s damage • %s speed • %s reach" % [info.damage_class, info.speed_class, info.reach_class], 15, MUTED)
+		text(card, "Big: " + str(info.big_name), 15, TEAL)
+	button(col, "Back", show_menu)
+
+func show_new_additions() -> void:
+	clear_ui("new_additions")
+	_menu_backdrop()
+	var col := page("New Additions", "ROSTER / FUTURE DROPS")
+	text(col, "This slot is where future fighters land when they drop. The launch eight are already in — find them in the Roster.", 20, MUTED)
+	button(col, "Browse the Roster", show_roster)
+	button(col, "Back", show_menu)
+
 func show_menu() -> void:
 	clear_ui("menu")
+	_menu_backdrop()
 	var col := page("Keep your name lit.")
-	text(col,"The Rooftop is open. Four fighters. One road to the gate.",20,MUTED)
+	text(col,"The Rooftop is open. Eight fighters. One road to the gate.",20,MUTED)
 	button(col,"STORY  /  The Prologue",enter_story,true)
 	button(col,"PLAYER vs CPU",func(): mode="cpu"; select_opponent=false; show_select())
 	button(col,"TRAINING  /  Free practice",func(): mode="training"; lesson=-1; select_opponent=false; show_select())
+	button(col,"ROSTER  /  Explore the Artists",show_roster)
+	button(col,"NEW ADDITIONS  /  Future fighters",show_new_additions)
 	var h := row(col)
 	button(h,"Upgrades",show_upgrades)
 	button(h,"Settings",show_settings)
 	button(h,"Move guide",show_help)
 	if not notices.is_empty(): text(col,notices,16,GOLD)
-	text(col,"PASS 1 • MECHANICS BUILD\nProperty of LiveLayer Technology LLC.",14,MUTED)
+	text(col,"PASS 2 • FRONT DOOR BUILD\nProperty of LiveLayer Technology LLC.",14,MUTED)
 
 func show_layout(first: bool = false) -> void:
 	clear_ui("layout")
@@ -209,6 +580,7 @@ func show_settings() -> void:
 
 func show_select() -> void:
 	clear_ui("select")
+	_menu_backdrop()
 	var title := "Choose your opponent" if select_opponent else "Choose your fighter"
 	var col := page(title,mode.to_upper()+" / ROOFTOP")
 	var grid := GridContainer.new()
@@ -221,24 +593,14 @@ func show_select() -> void:
 		var card := VBoxContainer.new()
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(card)
-		var portrait := ColorRect.new()
-		portrait.color = Color(info.color) * Color(0.4,0.4,0.4,1)
-		portrait.custom_minimum_size.y = 54
-		portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(portrait)
-		var mark := Label.new()
-		mark.text = str(info.name).substr(0,1)
-		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		mark.add_theme_font_size_override("font_size",38)
-		mark.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		portrait.add_child(mark)
+		card.add_child(_portrait_rect(id, 150))
 		button(card,info.name,func():_pick_fighter(id))
 	if mode == "cpu":
 		var h := row(col)
 		for i in 3:
 			button(h,["Easy","Standard","Hard"][i] + (" ✓" if difficulty==i else ""),func():difficulty=i;show_select())
 	if select_opponent:
-		button(col,"Random opponent",func():opponent=Data.IDS[randi()%4];start_fight())
+		button(col,"Random opponent",func():opponent=Data.IDS[randi()%Data.IDS.size()];start_fight())
 	button(col,"Back",func():
 		if select_opponent: select_opponent=false;show_select()
 		elif mode=="story":show_preview()
@@ -446,6 +808,12 @@ func _physics_process(_delta: float) -> void:
 	if sim.match_over and mode!="training":pending_result=true
 
 func _process(delta: float) -> void:
+	if screen == "boot":
+		_boot_tick(delta)
+	elif screen == "press_start":
+		press_elapsed += delta
+		if is_instance_valid(press_button):
+			press_button.modulate.a = 0.45 + 0.55 * absf(sin(press_elapsed * 2.4))
 	if screen=="story":
 		panel_elapsed+=delta
 		if is_instance_valid(scene_continue):
@@ -471,6 +839,8 @@ func _player_input() -> Dictionary:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:return
+	if screen == "press_start": _advance_press_start(); return
+	if screen == "boot": boot_skip = true; return
 	if event.physical_keycode==KEY_ESCAPE and screen=="fight":toggle_pause();return
 	if event.physical_keycode==KEY_M:store.set_setting("muted",not store.data.settings.muted)
 	if screen!="fight" or paused:return
@@ -488,7 +858,7 @@ func _update_hud() -> void:
 	for i in 2:
 		var f:Dictionary=sim.fighters[i]
 		health_bars[i].max_value=f.max_hp;health_bars[i].value=f.hp
-		health_labels[i].text="%s  %d/%d   %s" % [Data.get_fighter(f.id).name,f.hp,f.max_hp,"●".repeat(int(sim.round_wins[i]))]
+		health_labels[i].text="%s   %s" % [Data.get_fighter(f.id).name,"●".repeat(int(sim.round_wins[i]))]
 		var m:int=int(f.meter)
 		meter_labels[i].text="%s  %d/60%s" % ["▰".repeat(int(m/20))+"▱".repeat(3-int(m/20)),m,"  THROW READY" if m>=20 else ""]
 	clock_label.text="∞" if mode=="training" else "%02d" % ceili(sim.time_left/60.0)
@@ -562,7 +932,7 @@ func show_results() -> void:
 		if not (win and story_index==2 and not store.has_seen(Story.ending_scene())):button(col,"Return to Story",show_preview)
 	else:
 		button(col,"Rematch",start_fight,true)
-		button(col,"Random next opponent",func():opponent=Data.IDS[randi()%4];start_fight())
+		button(col,"Random next opponent",func():opponent=Data.IDS[randi()%Data.IDS.size()];start_fight())
 		button(col,"Change fighter / opponent",func():select_opponent=false;show_select())
 	if not (mode=="story" and win and story_index==2 and not store.has_seen(Story.ending_scene())):button(col,"Main menu",show_menu)
 
@@ -575,40 +945,110 @@ func show_upgrades() -> void:
 	choose.selected=Data.IDS.find(selected)
 	choose.item_selected.connect(func(index):selected=Data.IDS[index];show_upgrades())
 	col.add_child(choose)
-	text(col,"%s  /  %d points" % [Data.get_fighter(selected).name,store.get_points(selected)],25,TEAL)
-	for stat in ["hp","damage","speed"]:
-		var quote:Dictionary=store.quote_upgrade(selected,stat)
-		var b:=button(col,"%s  /  %s → %s  /  %d points" % ["Health" if stat=="hp" else stat.capitalize(),str(quote.get("before","")),str(quote.get("after","MAX")),int(quote.get("cost",0))],func():confirm_upgrade(stat))
-		b.disabled=not bool(quote.get("allowed",false))
+	text(col, Data.get_fighter(selected).name, 25, TEAL)
+	for stat in ["hp", "damage", "speed"]:
+		var quote: Dictionary = store.quote_upgrade(selected, stat)
+		var level := stat_level(stat)
+		var title: String = "Health" if stat == "hp" else stat.capitalize()
+		var label := ""
+		if bool(level.maxed):
+			label = "%s   %s   %s — MAX" % [title, str(level.pips), str(level.now)]
+		else:
+			label = "%s   %s   %s → %s" % [title, str(level.pips), str(level.now), str(level.next)]
+		var b := button(col, label, func(): confirm_upgrade(stat))
+		b.disabled = not bool(quote.get("allowed", false))
 	if not notices.is_empty():text(col,notices,16,GOLD)
 	button(col,"Back",func():
 		if mode=="story":show_preview()
 		else:show_menu())
 
-func confirm_upgrade(stat:String) -> void:
+func confirm_upgrade(stat: String) -> void:
 	clear_ui("confirm")
-	var quote:Dictionary=store.quote_upgrade(selected,stat)
-	var col:=page("Confirm your upgrade")
-	text(col,"%s • %s\n%s → %s\nSpend exactly %d points. %d points will remain." % [Data.get_fighter(selected).name,stat.capitalize(),str(quote.before),str(quote.after),quote.cost,store.get_points(selected)-int(quote.cost)],24)
+	var col := page("Confirm your upgrade")
+	var level := stat_level(stat)
+	var title: String = "Health" if stat == "hp" else stat.capitalize()
+	text(col, "%s • %s\n%s → %s\nThis raise is permanent in Story." % [Data.get_fighter(selected).name, title, str(level.now), str(level.next)], 24)
 	button(col,"Confirm purchase",func():
 		var ok:bool=store.purchase_upgrade(selected,stat)
 		notices="Upgrade saved." if ok else "Purchase could not be saved. Your points were kept."
 		show_upgrades(),true)
 	button(col,"Cancel",show_upgrades)
 
-func show_help(from_pause:bool=false) -> void:
-	if not from_pause:clear_ui("help")
-	var col:=page("The move guide")
-	text(col,"MOVE  WASD / arrows. Up jumps; release and press Up again while airborne for one higher double jump. Steer and attack in the air. Hold Back to block high, Down + Back to block low. Space / HOLD BLOCK is the accessible block control. No air blocking.",18)
-	text(col,"ATTACK  J light punch · U low punch · K kick · I heavy. Down + I / Heavy is a rising uppercut that catches jump-ins. Down + K / Kick is a low kick in both layouts. Simplified: Down + J / Punch gives a low punch, and Heavy supplies the high kick / uppercut. Five regular hits knock down. Attacks chain manually after a clean hit; every hit keeps full damage.",18)
-	text(col,"JUGGLE  Uppercut → Low punch → standing Heavy (high kick) → Down + Kick. Press each attack after the previous hit connects. Only the next correct move hits during the float; four hits stun for 90 frames and leave the next hit free. Wrong moves whiff. Landing or running out of time ends the string. Each launch permits one string; damage stays unscaled.",18)
-	text(col,"SPECIALS  Double-tap Back with 1 notch, or Forward with 3, then press the prompted attack within 2 seconds. Traditional Special / O opens the same prompt: hold Back for minor, Forward for big. Missing a big prompt costs 1 notch.",18)
-	text(col,"DEFEND  Block within 0.25 seconds of a regular hit to earn half a notch once per engagement. During a big special, tap and keep holding BLOCK / Space for half damage and survival. Jump before capture to evade.",18)
-	text(col,"THROW  Back → Forward → Punch, or L / Throw, at close range with at least 1 notch. Meter is held, not spent: 16 / 22 / 30 damage. When grabbed, Back → Back → Down within 0.6 seconds breaks free.",18)
-	text(col,"TRAIN  Free reset, idle / guard / CPU dummy, full starting meter, F2 refill, and three quick practice challenges. Esc pauses. M mutes placeholder effects.",18,MUTED)
-	button(col,"Back",func():
-		if from_pause:_rebuild_fight_ui();paused=true;toggle_pause()
-		else:show_menu())
+func show_help(from_pause: bool = false) -> void:
+	if not from_pause: clear_ui("help")
+	var col := page("The move guide")
+	var grid := GridContainer.new()
+	grid.columns = 2 if size.x >= 700 else 1
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(grid)
+
+	var move := guide_panel(grid, "MOVE")
+	var r := guide_row(move)
+	cap(r, "WASD"); cap(r, "←→↑↓"); cap_label(r, "Move")
+	r = guide_row(move)
+	var pair := guide_pair(r)
+	cap(pair, "↑"); cap_label(pair, "Jump")
+	pair = guide_pair(r)
+	cap(pair, "↑×2"); cap_label(pair, "Double jump")
+	r = guide_row(move)
+	pair = guide_pair(r)
+	cap(pair, "←"); cap_label(pair, "Block high")
+	pair = guide_pair(r)
+	cap(pair, "↓+←"); cap_label(pair, "Block low")
+	r = guide_row(move)
+	cap(r, "SPACE"); cap_label(r, "Hold block — none in air")
+
+	var attack := guide_panel(grid, "ATTACK")
+	r = guide_row(attack)
+	pair = guide_pair(r)
+	cap(pair, "J"); cap_label(pair, "Light punch")
+	pair = guide_pair(r)
+	cap(pair, "U"); cap_label(pair, "Low punch")
+	r = guide_row(attack)
+	pair = guide_pair(r)
+	cap(pair, "K"); cap_label(pair, "Kick")
+	pair = guide_pair(r)
+	cap(pair, "I"); cap_label(pair, "Heavy")
+	r = guide_row(attack)
+	pair = guide_pair(r)
+	cap(pair, "↓+I"); cap_label(pair, "Uppercut")
+	pair = guide_pair(r)
+	cap(pair, "↓+K"); cap_label(pair, "Low kick")
+	r = guide_row(attack)
+	cap(r, "↓+J"); cap_label(r, "Low punch — 5 hits knock down")
+
+	var juggle := guide_panel(grid, "JUGGLE — THE STRING")
+	r = guide_row(juggle)
+	cap(r, "↓+I", true); chain_sep(r); cap(r, "U", true); chain_sep(r); cap(r, "I", true); chain_sep(r); cap(r, "↓+K", true)
+	cap_label(juggle, "Uppercut, low punch, high kick, low kick — land each hit and the full string stuns. Next hit free.")
+
+	var specials := guide_panel(grid, "SPECIALS")
+	r = guide_row(specials)
+	pair = guide_pair(r)
+	cap(pair, "←←"); cap_label(pair, "1 notch")
+	pair = guide_pair(r)
+	cap(pair, "→→"); cap_label(pair, "3 notches")
+	cap_label(specials, "Then hit the flashing attack, fast.")
+	r = guide_row(specials)
+	cap(r, "O"); cap_label(r, "Prompt: ← minor · → big")
+
+	var defend := guide_panel(grid, "DEFEND")
+	r = guide_row(defend)
+	cap(r, "BLOCK"); cap_label(r, "Timed block = half notch")
+	cap_label(defend, "Hold block vs a big special: half damage. Jump escapes a capture.")
+
+	var throw := guide_panel(grid, "THROW")
+	r = guide_row(throw)
+	cap(r, "←", true); chain_sep(r); cap(r, "→", true); chain_sep(r); cap(r, "J", true); cap_label(r, "Close, 1 notch")
+	r = guide_row(throw)
+	cap(r, "L"); cap_label(r, "Throw — grabbed? ←←↓ breaks free")
+
+	var back := button(col, "Back", func():
+		if from_pause: _rebuild_fight_ui(); paused = true; toggle_pause()
+		else: show_menu())
+	back.custom_minimum_size.y = 42
 
 func _sound(frequency:float) -> void:
 	if store.data.settings.muted or DisplayServer.get_name()=="headless":return
@@ -656,6 +1096,9 @@ func _relayout() -> void:
 		"upgrades":show_upgrades()
 		"settings":show_settings()
 		"help":show_help()
+		"roster":show_roster()
+		"new_additions":show_new_additions()
+		"boot","press_start":pass
 		"story":
 			var elapsed:=panel_elapsed
 			show_story_panel()

@@ -50,8 +50,8 @@ static func _fresh(one: String = "bank", two: String = "bank", training: bool = 
 	return sim
 
 static func _test_roster() -> void:
-	_equal(Data.IDS.size(), 4, "Exactly four fighters ship in the first pass")
-	var health: Dictionary = {"cin": 200, "rico": 200, "hood": 210, "bank": 200}
+	_equal(Data.IDS.size(), 8, "Exactly eight fighters ship in the launch roster")
+	var health: Dictionary = {"cin": 200, "rico": 200, "hood": 210, "bank": 200, "smash": 200, "jo": 200, "lmscurt": 200, "hublo": 200}
 	for id in Data.IDS:
 		var fighter: Dictionary = Data.get_fighter(id)
 		_equal(fighter.hp, health[id], id + " base health")
@@ -207,7 +207,7 @@ static func _test_minor_specials() -> void:
 		sim.fighters[0].meter = 20
 		_open_special(sim)
 		_tick(sim, {}, {}, 100)
-		_equal(200 - sim.fighters[1].hp, 20 if id == "rico" else 22, id + " minor special uses reduced damage on the larger health bar")
+		_equal(200 - sim.fighters[1].hp, 20 if Data.get_fighter(id).minor == "multi" else 22, id + " minor special uses reduced damage on the larger health bar")
 		_equal(sim.fighters[0].meter, 0, "Minor special spends exactly one notch and awards no hit meter")
 		sim = _fresh(id)
 		_close(sim, 65)
@@ -478,7 +478,7 @@ static func _test_dog() -> void:
 	sim.fighters[0].state = "down"
 	sim.fighters[0].timer = 48
 	_tick(sim)
-	_equal(sim.fighters[1].hp, 194, "Dog attacks automatically while Cin is knocked down")
+	_equal(sim.fighters[1].hp, 198, "Dog attacks automatically while Cin is knocked down")
 	_equal(sim.fighters[0].meter, 2, "Dog regular hit pays half meter")
 	_equal(sim.fighters[0].combo_hits, 1, "Dog shares Cin's regular combo count")
 	sim = _fresh("bank", "cin")
@@ -498,7 +498,7 @@ static func _test_dog() -> void:
 	_tick(sim)
 	_check(sim.fighters[1].state != "grabbed", "Dog can interrupt a regular throw and free Cin")
 	_equal(sim.fighters[1].hp, 200, "Dog throw interruption prevents grab damage")
-	_equal(sim.fighters[0].hp, 194, "Dog interruption damages the grabber")
+	_equal(sim.fighters[0].hp, 198, "Dog interruption damages the grabber")
 	# A captured Cin still has an attacking partner. Damage is allowed; the
 	# big special must retain control and complete its entire locked sequence.
 	sim = _fresh("bank", "cin")
@@ -513,7 +513,7 @@ static func _test_dog() -> void:
 	sim.fighters[1].dog_x = sim.fighters[0].x + 60
 	sim.fighters[1].dog_cooldown = 0
 	_tick(sim)
-	_equal(sim.fighters[0].hp, 194, "Dog keeps dealing damage while Cin is captured")
+	_equal(sim.fighters[0].hp, 198, "Dog keeps dealing damage while Cin is captured")
 	_equal(sim.fighters[1].meter, 2, "Dog hit while Cin is captured still earns half meter")
 	_equal(sim.fighters[0].state, "big", "Dog damage cannot cancel, stagger, or knock down the active big special")
 	_equal(sim.fighters[1].state, "big_capture", "Dog damage cannot release Cin from big-special capture")
@@ -604,7 +604,7 @@ static func _test_gestures_and_trade() -> void:
 		var button: String = sim.fighters[0].prompt.button
 		_tick(sim, {"attack": button, "down": true}, {"block": true})
 		_tick(sim, {}, {"block": true}, 100)
-		_equal(sim.fighters[1].hp, 180 if id == "rico" else 178, id + " wrong-position guard takes full minor-special damage")
+		_equal(sim.fighters[1].hp, 180 if Data.get_fighter(id).minor == "multi" else 178, id + " wrong-position guard takes full minor-special damage")
 
 static func _test_extended_combo_counts() -> void:
 	var sim = _fresh("rico")

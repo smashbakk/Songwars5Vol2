@@ -10,7 +10,7 @@ const Data = preload("res://scripts/combat/fighter_data.gd")
 class OldDamageSim:
 	extends "res://scripts/combat/fight_sim.gd"
 
-	const OLD_REGULAR = {"light": 8, "low": 10, "kick": 12, "heavy": 18, "uppercut": 16}
+	const OLD_REGULAR = {"light": 8, "low": 10, "kick": 12, "heavy": 18, "uppercut": 16, "low_kick": 10}
 	const OLD_BIG = {
 		"cin": [8, 12, 10, 20, 40], "rico": [12, 12, 12, 14, 40],
 		"hood": [20, 30, 40], "bank": [20, 20, 50]
@@ -20,7 +20,7 @@ class OldDamageSim:
 
 	func _make_fighter(id: String, index: int, upgrades: Dictionary) -> Dictionary:
 		var fighter: Dictionary = super._make_fighter(id, index, upgrades)
-		fighter.big_hits = OLD_BIG[fighter.id].duplicate()
+		fighter.big_hits = OLD_BIG.get(fighter.id, fighter.big_hits).duplicate()
 		return fighter
 
 	func _damage(i: int, damage: int, kind: String, blocked: bool, minimum_hp: int = 0) -> void:
