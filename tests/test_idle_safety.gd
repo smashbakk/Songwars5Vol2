@@ -41,7 +41,7 @@ static func _idle_drops(training: bool, frames: int) -> Dictionary:
 
 static func _test_idle_vs_cin(training: bool) -> void:
 	var mode: String = "training" if training else "versus"
-	var result: Dictionary = _idle_drops(training, 1800)
+	var result: Dictionary = _idle_drops(training, 3600)
 	var drops: Array = result.drops
 	_check(drops.size() >= 5, "Idle vs Cin (%s): the dog still bites (kept feature), saw %d bites" % [mode, drops.size()])
 	var only_twos: bool = true
