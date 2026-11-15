@@ -80,31 +80,64 @@ func _uppercut_input(sample: Dictionary, label: String) -> void:
 		combat.step([sample, {}])
 		_check(combat.fighters[0].move == "uppercut" and not combat.fighters[0].attack_low, label + " starts a high uppercut for " + id)
 
+func _low_kick_input(sample: Dictionary, label: String) -> void:
+	var combat = Sim.new()
+	combat.setup("bank", "bank", {}, {}, true)
+	combat.countdown = 0
+	combat.step([sample, {}])
+	_check(combat.fighters[0].move == "low_kick" and combat.fighters[0].attack_low, label + " starts a distinct low kick")
+
+func _combo_inputs(samples: Array, label: String) -> void:
+	var combat = Sim.new()
+	combat.setup("bank", "bank", {}, {}, true)
+	combat.countdown = 0
+	combat.fighters[0].x = 500
+	combat.fighters[1].x = 570
+	for hit in samples.size():
+		combat.step([samples[hit], {}])
+		for tick in 45:
+			if int(combat.fighters[1].get("juggle_hits",0)) == hit + 1:
+				break
+			combat.step([{}, {}])
+		_check(int(combat.fighters[1].get("juggle_hits",0)) == hit + 1, label + " connects hit " + str(hit + 1))
+	_check(combat.fighters[1].state == "stunned", label + " completes the string into stun")
+
 func _keyboard_checks() -> void:
 	var original_layout: String = game.store.data.settings.layout
 	for layout in ["simplified", "traditional"]:
 		game.store.set_setting("layout", layout)
 		game.touch.layout = layout
 		game.touch.clear()
+		var combo_samples:Array=[]
 		_key(KEY_S, true)
 		_key(KEY_I, true)
 		var sample: Dictionary = game._player_input()
 		_check(sample.down and sample.attack == "heavy", layout + " keyboard Down + I delivers heavy with Down")
 		_uppercut_input(sample, layout + " keyboard Down + I")
+		combo_samples.append(sample.duplicate(true))
 		_key(KEY_I, false)
 		_key(KEY_U, true)
-		_check(game._player_input().attack == "low", layout + " Down + U keeps drop-down punch")
+		sample=game._player_input()
+		_check(sample.attack == "low", layout + " Down + U keeps drop-down punch")
+		combo_samples.append(sample.duplicate(true))
 		_key(KEY_U, false)
 		_key(KEY_J, true)
 		_check(game._player_input().attack == ("low" if layout == "simplified" else "light"), layout + " Down + J retains punch mapping")
 		_key(KEY_J, false)
 		_key(KEY_K, true)
 		sample = game._player_input()
-		_check(sample.attack == ("heavy" if layout == "simplified" else "kick"), layout + " Down + K retains layout mapping")
-		if layout == "simplified":
-			_uppercut_input(sample, "simplified keyboard Down + K")
+		_check(sample.attack == "low_kick", layout + " Down + K maps low kick")
+		_low_kick_input(sample, layout + " keyboard Down + K")
+		var low_kick_sample:Dictionary=sample.duplicate(true)
 		_key(KEY_K, false)
 		_key(KEY_S, false)
+		_key(KEY_I, true)
+		sample=game._player_input()
+		_check(sample.attack=="heavy" and not sample.down,layout+" standing I maps high kick")
+		combo_samples.append(sample.duplicate(true))
+		combo_samples.append(low_kick_sample)
+		_combo_inputs(combo_samples,layout+" keyboard juggle")
+		_key(KEY_I,false)
 		_key(KEY_W, true)
 		_check(game._player_input().jump and game._player_input().jump, layout + " held keyboard Up stays held for simulator edge detection")
 		_key(KEY_W, false)
@@ -116,12 +149,12 @@ func _keyboard_checks() -> void:
 			game.touch._regions()
 			_finger(0, game.touch.regions.down.get_center(), true)
 			_key(KEY_K, true)
-			_uppercut_input(game._player_input(), "touch Down + keyboard Kick")
+			_low_kick_input(game._player_input(), "touch Down + keyboard Kick")
 			_key(KEY_K, false)
 			game.touch.clear()
 			_key(KEY_S, true)
 			_finger(1, game.touch.regions.kick.get_center(), true)
-			_uppercut_input(game._player_input(), "keyboard Down + touch Kick")
+			_low_kick_input(game._player_input(), "keyboard Down + touch Kick")
 			_finger(1, game.touch.regions.kick.get_center(), false)
 			_finger(1, game.touch.regions.punch.get_center(), true)
 			_check(game._player_input().attack == "low", "keyboard Down + touch Punch preserves drop-down punch")
@@ -142,6 +175,23 @@ func _hud_checks() -> void:
 	_check(game.health_labels[1].text.contains("186/200"), "heavy damage displays the true remaining pool")
 	_check(is_equal_approx(game.health_bars[1].value / game.health_bars[1].max_value, 0.93), "clean heavy drains exactly seven percent of the health bar")
 	target.hp = previous_hp
+	var before:Dictionary=game.sim.snapshot()
+	game.sim.countdown=0
+	for owner in 2:
+		var defender:Dictionary=game.sim.fighters[1-owner]
+		defender.juggle_owner=owner
+		defender.juggle_hits=2
+		defender.juggle_window=12
+		game._update_hud()
+		_check(game.fight_status.text=="P%d  2 HITS" % (owner+1),"juggle HUD shows hit count for either side")
+		defender.juggle_hits=4
+		defender.juggle_window=0
+		defender.state="stunned"
+		game._update_hud()
+		_check(game.fight_status.text=="P%d  4 HITS — STUNNED" % (owner+1),"juggle HUD identifies stun for either side")
+		defender.juggle_hits=0
+		defender.state="idle"
+	game.sim.restore(before)
 	game._update_hud()
 
 func _pose_checks() -> void:
@@ -176,8 +226,11 @@ func _touch_checks() -> void:
 	_finger(1, touch.regions.punch.get_center(), false)
 	_finger(1, touch.regions.kick.get_center(), true)
 	sample = touch.sample()
-	_check(sample.down and sample.attack == "heavy", "simplified down plus kick maps heavy")
-	_uppercut_input(sample, "simplified touch Down + Kick")
+	_check(sample.down and sample.attack == "low_kick", "simplified down plus kick maps low kick")
+	_low_kick_input(sample, "simplified touch Down + Kick")
+	_finger(1,touch.regions.kick.get_center(),false)
+	_finger(1,touch.regions.heavy.get_center(),true)
+	_uppercut_input(touch.sample(),"simplified touch Down + Heavy")
 	touch.clear()
 	_finger(0, touch.regions.up_forward.get_center(), true)
 	_finger(1, touch.regions.block.get_center(), true)
@@ -203,6 +256,9 @@ func _touch_checks() -> void:
 	_finger(1, touch.regions.heavy.get_center(), false)
 	_finger(1, touch.regions.low.get_center(), true)
 	_check(touch.sample().attack == "low", "traditional touch Down + Low preserves drop-down punch")
+	_finger(1,touch.regions.low.get_center(),false)
+	_finger(1,touch.regions.kick.get_center(),true)
+	_low_kick_input(touch.sample(),"traditional touch Down + Kick")
 	touch.clear()
 	touch.prompt_button = "heavy"
 	touch._regions()
@@ -213,6 +269,36 @@ func _touch_checks() -> void:
 	for action in touch.regions:
 		var rect: Rect2 = touch.regions[action]
 		_check(rect.position.x >= 0 and rect.position.y >= 0 and rect.end.x <= touch.size.x + 1 and rect.end.y <= touch.size.y + 1, "touch region fits viewport: " + action)
+	for layout in ["simplified","traditional"]:
+		touch.layout=layout
+		touch.clear()
+		touch._regions()
+		var combo_samples:Array=[]
+		_finger(0,touch.regions.down.get_center(),true)
+		_finger(1,touch.regions.heavy.get_center(),true)
+		combo_samples.append(touch.sample())
+		_finger(1,touch.regions.heavy.get_center(),false)
+		var punch:String="punch" if layout=="simplified" else "low"
+		_finger(1,touch.regions[punch].get_center(),true)
+		combo_samples.append(touch.sample())
+		_finger(1,touch.regions[punch].get_center(),false)
+		_finger(0,touch.regions.down.get_center(),false)
+		_finger(1,touch.regions.heavy.get_center(),true)
+		combo_samples.append(touch.sample())
+		_finger(1,touch.regions.heavy.get_center(),false)
+		_finger(0,touch.regions.down.get_center(),true)
+		_finger(1,touch.regions.kick.get_center(),true)
+		combo_samples.append(touch.sample())
+		_combo_inputs(combo_samples,layout+" touch juggle")
+		for action in touch.regions:
+			var rect:Rect2=touch.regions[action]
+			_check(rect.position.x>=0 and rect.position.y>=0 and rect.end.x<=touch.size.x+1 and rect.end.y<=touch.size.y+1,layout+" touch region fits viewport: "+action)
+		touch.clear()
+		_finger(1,touch.regions.heavy.get_center(),true)
+		_finger(2,touch.regions.kick.get_center(),true)
+		touch.sample()
+		_check(touch.sample().attack=="",layout+" simultaneous taps do not queue a future string")
+		touch.clear()
 
 func _run() -> void:
 	for arg in OS.get_cmdline_user_args():

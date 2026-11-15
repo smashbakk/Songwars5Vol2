@@ -26,6 +26,7 @@ func _regions() -> void:
 	if layout == "simplified":
 		regions.punch = Rect2(Vector2(right, left.y) + unit * Vector2(0.8, -0.1), Vector2.ONE * unit * 1.1)
 		regions.kick = Rect2(Vector2(right, left.y) + unit * Vector2(2.0, 0.65), Vector2.ONE * unit * 1.1)
+		regions.heavy = Rect2(Vector2(right, left.y) + unit * Vector2(0.8, 1.2), Vector2.ONE * unit * 1.1)
 	else:
 		for cell in [[0,0,"light"],[1.15,0,"low"],[0,1.15,"kick"],[1.15,1.15,"heavy"],[2.3,0,"throw"],[2.3,1.15,"special"]]:
 			regions[cell[2]] = Rect2(Vector2(right, left.y) + Vector2(cell[0], cell[1]) * unit, Vector2.ONE * unit)
@@ -79,8 +80,10 @@ func sample(keyboard_down: bool = false) -> Dictionary:
 			if name == "block": result.block = true
 	if not actions.is_empty():
 		result.attack = actions.pop_front()
+		# Multiple taps sampled together are one press, never a stored combo string.
+		actions.clear()
 		if result.attack == "punch": result.attack = "low" if result.down else "light"
-		elif result.attack == "kick" and layout == "simplified" and result.down: result.attack = "heavy"
+		elif result.attack == "kick" and result.down: result.attack = "low_kick"
 	return result
 
 func clear() -> void:

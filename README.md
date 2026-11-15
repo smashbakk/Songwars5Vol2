@@ -25,8 +25,8 @@ godot4 --path . --log-file "$PWD/work/play.log" -- --save-path=res://work/play_s
 
 - Four selectable fighters: **Cin City, Rico Ruffino, Big Hood Tha King, Bank Sinatra**, including mirror matches and Cin City's independently targetable dog sharing her health.
 - The **Rooftop** arena, drawn with temporary illustrated shapes and distinct fighter poses.
-- Manual attacks and cancels, crouching uppercuts, double jumps, high/low blocking, timed blocks, chip damage, three-notch meter, prompted minor and big specials, throws and throw breaks, air steering, knockdown/get-up protection, hitstop, and the five-hit rule. Combo hits keep full damage.
-- Base health is **200 HP** (**210** for Big Hood); the health label and bar show the real pool. Standard regular attacks deal **6 / 8 / 10 / 14 / 16** for light / low / kick / heavy / uppercut. Specials and throws use reduced percentages of the larger pool.
+- Manual attacks and cancels, crouching uppercuts with a four-hit juggle string, double jumps, high/low blocking, timed blocks, chip damage, three-notch meter, prompted minor and big specials, throws and throw breaks, air steering, knockdown/get-up protection, hitstop, and the five-hit rule. Combo hits keep full damage.
+- Base health is **200 HP** (**210** for Big Hood); the health label and bar show the real pool. Standard regular attacks deal **6 / 8 / 10 / 14 / 16** for light / low / kick / heavy / uppercut; the distinct low kick uses normal kick damage. Specials and throws use reduced percentages of the larger pool.
 - Best-of-three CPU matches, 99-second rounds, round countdowns, and Easy/Standard/Hard settings for one seeded CPU brain.
 - Free training with reset, full starting meter, idle/guard/CPU dummy choices, and three short practice challenges: Move & Block, Combos & the 5-Hit Rule, and Survive the Big Special.
 - The complete three-fight **Prologue**: Bank → Rico → Big Hood. Story panels follow the supplied script; the ending presents Smash's unseen voice before his silhouette and preserves both locked lines. Text stands in for recorded voices.
@@ -40,9 +40,9 @@ Art, story panels, and hit tones are placeholders. There are no fabricated fight
 
 ## Controls
 
-Touch uses an eight-direction pad plus the selected layout. Simplified has Punch/Kick; hold Down for low punch/uppercut. Traditional exposes four attacks, Throw, and Special; Down + Heavy performs an uppercut. A prompted attack also gets a dedicated touch target. HOLD BLOCK is available in both layouts.
+Touch uses an eight-direction pad plus the selected layout. Simplified has Punch, Kick, and Heavy; Down + Punch gives a low punch. Traditional exposes four attacks, Throw, and Special. In both layouts, standing Heavy is the high kick, Down + Heavy performs an uppercut, and Down + Kick gives the distinct low kick. The new Heavy button lets Simplified access every step without changing moves based on combo progress. A prompted attack also gets a dedicated touch target. HOLD BLOCK is available in both layouts.
 
-Uppercuts launch opponents no higher than a normal jump (110 units). Only a fighter's own jump permits a double jump; an uppercut launch must land first. A fresh second jump reaches 160 units, with air steering and attacks available throughout.
+Uppercuts launch opponents no higher than a normal jump (110 units), including every juggle re-pop. Only a fighter's own jump permits a double jump; an uppercut launch must land first. A fresh second jump reaches 160 units, with air steering and attacks available throughout.
 
 | Keyboard | Action |
 |---|---|
@@ -50,13 +50,16 @@ Uppercuts launch opponents no higher than a normal jump (110 units). Only a figh
 | J / U | Light punch / low punch |
 | K / I | Kick / heavy kick |
 | Down + I | Uppercut in either layout |
-| Down + J/K in Simplified | Low punch / uppercut |
+| Down + K | Low kick in either layout |
+| Down + J in Simplified | Low punch |
 | Space | Hold Block; tap and keep holding when defending a big special |
 | L | Throw shortcut |
 | O | Special prompt shortcut; hold Back for minor, Forward for big |
 | Esc | Pause/resume; combat windows freeze |
 | M | Mute/unmute placeholder effects |
 | F2 in training | Refill both meters |
+
+**Juggle string:** uppercut → low punch → standing Heavy (high kick) → Down + Kick (low kick). Press each new attack after the previous hit connects. During the float, only the next correct move connects; wrong moves and repeated presses whiff. Correct hits re-pop the opponent and refresh the 24-frame window, with normal damage and no scaling. Landing or a window timeout ends the string. Hit four applies a distinct 90-frame stun: the defender cannot act or block and the next hit is free; afterward they fall and use the existing knockdown/getup recovery. There is one string per launch. Both players and the seeded CPU use the same rules; the CPU attempts the string occasionally and can choose a wrong move. Plain text shows either side's hit count and stun.
 
 Back and Forward are relative to your fighter's facing. Hold Back to block high; Down + Back blocks low. There is no air block. A clean timed regular block starts within 0.25 seconds of impact and earns half a notch once per engagement.
 
@@ -84,13 +87,13 @@ Both commands exit with status 0 on success. Progression tests and UI smoke save
 
 | Suite | Checks |
 |---|---|
-| Fight simulation | Roster values, attack startup/damage, uppercut anti-air and launch, double-jump limits and landing reset, held/timed and high/low blocks, chip, meter, special molds and splits, big defense/release/evade, throws/breaks/whiffs, five-hit knockdown, dog/shared-health behavior, movement, simultaneous contacts, round rules, CPU behavior, damage pacing against the old table, seeded replay and snapshot restoration |
+| Fight simulation | Roster values, attack startup/damage, uppercut anti-air and launch, ordered juggle inputs and whiffs, fresh presses, stun/free follow-up, landing/timeout cleanup and re-pop apex cap, double-jump limits and landing reset, held/timed and high/low blocks, chip, meter, special molds and splits, big defense/release/evade, throws/breaks/whiffs, five-hit knockdown, dog/shared-health behavior, movement, simultaneous contacts, round rules, CPU behavior, damage pacing against the old table, seeded replay and snapshot restoration |
 | Progression | Fighter-specific earnings/spending, replay rewards, upgrade quotes/caps, legacy save health scaling and story continuation, save reload, backup recovery and corrupt data bounds, attempt limits/reset/bypass, sequential progression, chapter unlocks, locked lineups and exact ending dialogue |
-| UI smoke | First-run layout, all four selections, CPU stepping, pause, training, multitouch/layout mappings, story panels/results/upgrades, gate staging, disk reload, and screen/control bounds in landscape/portrait phone and desktop sizes |
+| UI smoke | First-run layout, all four selections, CPU stepping, pause, training, multitouch/layout mappings and completed keyboard/touch juggle strings, combo HUD, story panels/results/upgrades, gate staging, disk reload, and screen/control bounds in landscape/portrait phone and desktop sizes |
 
 The smoke test invokes the real menus and simulation. Its story-result fixtures exercise progression wiring; fight outcomes and combat rules are tested separately by the simulation suite.
 
-The damage pacing regression compares identical seeded CPU matchups using the new table and the old percentages normalized to 200 HP. Across 54 rounds per table, current CPU rounds average about 15.9 seconds versus 12.6 seconds before. The clean-heavy barrage takes 15 hits / 9.30 seconds versus 12 hits / 7.35 seconds. These prescribed damage values increase round length but do not yet produce the intended 45–75-second CPU rounds.
+The damage pacing regression compares identical seeded CPU matchups using the new table and the old percentages normalized to 200 HP. Across 54 rounds per table, current CPU rounds average about 16.4 seconds versus 12.7 seconds with the old table. The clean-heavy barrage takes 15 hits / 9.30 seconds versus 12 hits / 7.35 seconds. These prescribed damage values increase round length but do not yet produce the intended 45–75-second CPU rounds.
 
 ## Simulation contract
 
@@ -103,7 +106,7 @@ Each player's input is a dictionary:
  "attack": "light", "block": false, "tap": ""}
 ```
 
-`move` is world-left/right (`-1/0/1`); `attack` is a one-tick press: empty, `light`, `low`, `kick`, `heavy`, `throw`, or `special`. `tap` optionally supplies the relative gesture token `back`, `forward`, or `down`; otherwise direction transitions generate gestures. Held attack buttons do not auto-chain in the UI.
+`move` is world-left/right (`-1/0/1`); `attack` is a one-tick press: empty, `light`, `low`, `kick`, `low_kick`, `heavy`, `uppercut`, `throw`, or `special`. `kick` with `down` resolves to `low_kick`; `heavy` with `down` (or from crouch) resolves to `uppercut`. `tap` optionally supplies the relative gesture token `back`, `forward`, or `down`; otherwise direction transitions generate gestures. Held attack buttons do not auto-chain in the UI.
 
 For replay, retain the setup arguments/seed and record both sampled input dictionaries for every tick, including countdown and hitstop ticks. Replay the same ordered pairs through `step`. `snapshot()`/`restore()` round-trip fight state for resimulation. The CPU has its own seeded `setup` and `snapshot`/`restore`; record its emitted inputs alongside the player's inputs, or preserve its state when regenerating decisions. Actual network delay, rollback buffering, server verification, and input-log persistence belong to the later online implementation.
 

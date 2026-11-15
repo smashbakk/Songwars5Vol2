@@ -7,6 +7,7 @@ const MOVE_DATA = {
 	"light": {"startup": 5, "active": 3, "recovery": 8, "hitstun": 12, "blockstun": 8, "hitstop": 2, "damage": 6, "range": 108},
 	"low": {"startup": 6, "active": 3, "recovery": 10, "hitstun": 13, "blockstun": 9, "hitstop": 2, "damage": 8, "range": 115},
 	"kick": {"startup": 8, "active": 4, "recovery": 12, "hitstun": 15, "blockstun": 10, "hitstop": 3, "damage": 10, "range": 140},
+	"low_kick": {"startup": 8, "active": 4, "recovery": 12, "hitstun": 15, "blockstun": 10, "hitstop": 3, "damage": 10, "range": 140},
 	"heavy": {"startup": 12, "active": 4, "recovery": 18, "hitstun": 18, "blockstun": 12, "hitstop": 5, "damage": 14, "range": 165},
 	"uppercut": {"startup": 10, "active": 4, "recovery": 20, "hitstun": 20, "blockstun": 12, "hitstop": 5, "damage": 16, "range": 120}
 }
@@ -16,6 +17,9 @@ const KNOCKDOWN_FRAMES = 48
 const GETUP_FRAMES = 12
 const JUMP_APEX = 110
 const DOUBLE_JUMP_APEX = 160
+const JUGGLE_SEQUENCE = ["uppercut", "low", "heavy", "low_kick"]
+const JUGGLE_WINDOW = 24
+const JUGGLE_STUN_FRAMES = 90
 var fighters: Array = []
 var projectiles: Array = []
 var events: Array = []
@@ -71,6 +75,9 @@ func _reset_fighter(f: Dictionary, index: int, carry: int) -> void:
 		"combo_hits": 0, "combo_damage": 0, "combo_timer": 0, "blocking": false, "down": false, "block_age": 999,
 		"block_paid": false, "engagement": 0, "prev_move": 0, "prev_down": false, "prev_jump": false, "prev_block": false,
 		"jump_frame": 0, "jump_origin": 0, "normal_jump": false, "double_jump_used": false,
+		"juggle_owner": -1, "juggle_hits": 0, "juggle_window": 0, "juggle_press": 0,
+		"launch_used": false, "juggle_fall": false,
+		"input_serial": 0, "current_press": 0, "attack_press": 0, "queued_press": 0,
 		"walk_remainder": 0, "taps": [], "throw_ready": 0, "break_taps": [], "prompt": {}, "queued_attack": "",
 		"attack_low": false, "contact_dog": false, "minor_low": false, "minor_hits": 0, "big_index": 0, "big_protected": false, "big_attempted": false,
 		"big_holding": false, "big_owner": -1, "throw_target": -1, "throw_damage": 0,
@@ -83,6 +90,8 @@ func step(inputs: Array) -> void:
 	for i in range(2):
 		if i < inputs.size() and inputs[i] is Dictionary:
 			last_inputs[i] = inputs[i].duplicate(true)
+		if not str(last_inputs[i].get("attack", "")).is_empty():
+			fighters[i].input_serial = int(fighters[i].input_serial) + 1
 	if match_over:
 		return
 	if countdown > 0:
@@ -100,13 +109,21 @@ func step(inputs: Array) -> void:
 		for i in range(2):
 			var pressed: String = str(last_inputs[i].get("attack", ""))
 			if not pressed.is_empty():
-				# Preserve a crouched heavy pressed during the freeze, even if Down
-				# is released before the queued move can start.
-				fighters[i].queued_attack = "uppercut" if pressed == "heavy" and (bool(last_inputs[i].get("down", false)) or str(fighters[i].state) == "crouch") else pressed
+				# Freeze the input variant and press time, not the later held direction.
+				fighters[i].queued_attack = _regular_variant(fighters[i], pressed, bool(last_inputs[i].get("down", false)))
+				fighters[i].queued_press = int(fighters[i].input_serial)
 		return
 	combat_frame += 1
 	if not training:
 		time_left = maxi(0, time_left - 1)
+	# Expire both windows before either fighter checks contact. A final-frame
+	# input must have the same result on the left and right player slots.
+	for i in range(2):
+		var target: Dictionary = fighters[i]
+		if int(target.juggle_window) > 0:
+			target.juggle_window = int(target.juggle_window) - 1
+			if int(target.juggle_window) == 0 or int(target.y) <= 0:
+				_end_juggle(i)
 	for i in range(2):
 		_update_input(i, last_inputs[i])
 	pending_contacts = []
@@ -115,6 +132,17 @@ func step(inputs: Array) -> void:
 	# Resolve contacts after both animations advance, so simultaneous strikes trade.
 	for contact in pending_contacts:
 		if contact.kind == "regular":
+			var owner: int = int(contact.owner)
+			if bool(contact.juggle) and int(fighters[1 - owner].juggle_window) <= 0:
+				# Landing may happen after this candidate was collected. Once the
+				# float ends, its extra vertical reach cannot carry into a normal hit.
+				var data: Dictionary = MOVE_DATA[str(contact.move)]
+				var reach: int = int(int(data.range) * int(fighters[owner].reach_percent) / 100)
+				if not _in_attack_range(owner, reach, bool(fighters[owner].attack_low), str(contact.move) == "uppercut"):
+					fighters[owner].connected = false
+					fighters[owner].can_cancel = false
+					continue
+				contact.dog = fighters[owner].contact_dog
 			_hit_regular(int(contact.owner), str(contact.move), false, bool(contact.dog))
 		else:
 			_minor_hit(int(contact.owner), int(contact.damage), int(contact.chip), bool(contact.final), bool(contact.dog))
@@ -155,10 +183,20 @@ func _update_input(i: int, input: Dictionary) -> void:
 			f.big_holding = true
 			events.append({"type": "big_guard", "target": i})
 	var attack: String = str(input.get("attack", ""))
+	var buffered_variant: bool = false
+	f.current_press = int(f.input_serial)
 	if attack.is_empty() and not str(f.queued_attack).is_empty():
 		attack = str(f.queued_attack)
+		f.current_press = int(f.queued_press)
+		buffered_variant = true
 	f.queued_attack = ""
-	if f.prompt.get("kind", "") in ["minor", "big"] and attack == str(f.prompt.get("button", "")):
+	f.queued_press = 0
+	var follows_juggle: bool = int(fighters[1 - i].juggle_owner) == i and int(fighters[1 - i].juggle_window) > 0
+	var variant: String = attack if buffered_variant else _regular_variant(f, attack, down)
+	var juggle_input: bool = follows_juggle and variant == JUGGLE_SEQUENCE[int(fighters[1 - i].juggle_hits)]
+	# The string's explicit attacks take priority over earlier gesture/prompt
+	# shortcuts, which would otherwise turn the required low punch into a throw.
+	if not juggle_input and f.prompt.get("kind", "") in ["minor", "big"] and attack == str(f.prompt.get("button", "")):
 		var kind: String = str(f.prompt.kind)
 		f.prompt = {}
 		if _can_act(f):
@@ -175,10 +213,10 @@ func _update_input(i: int, input: Dictionary) -> void:
 	if _can_act(f):
 		if attack == "special":
 			_offer_special(i, "minor" if move_axis == -int(f.facing) or int(f.meter) < 60 else "big")
-		elif attack == "throw" or (attack in ["light", "low"] and int(f.throw_ready) > 0):
+		elif attack == "throw" or (not juggle_input and attack in ["light", "low"] and int(f.throw_ready) > 0):
 			_start_throw(i)
 		elif MOVE_DATA.has(attack):
-			_start_regular(i, attack)
+			_start_regular(i, attack, not buffered_variant)
 		elif jump and not bool(f.prev_jump) and int(f.y) == 0:
 			f.jump_frame = 1
 			f.jump_origin = 0
@@ -189,7 +227,7 @@ func _update_input(i: int, input: Dictionary) -> void:
 			f.state = "crouch" if down else ("walk" if move_axis != 0 else "idle")
 		if str(f.state) in ["idle", "walk", "jump"] and not down:
 			_walk(f, move_axis)
-	elif int(f.y) > 0 and str(f.state) not in ["big_capture", "grabbed"]:
+	elif int(f.y) > 0 and str(f.state) not in ["big_capture", "grabbed", "juggle", "stunned"] and not bool(f.juggle_fall):
 		_walk(f, move_axis)
 	f.prev_jump = jump
 
@@ -238,7 +276,7 @@ func _offer_special(i: int, kind: String) -> void:
 	events.append({"type": "special_prompt", "attacker": i, "kind": kind})
 
 func _can_act(f: Dictionary) -> bool:
-	return int(f.stun) <= 0 and (str(f.state) in ["idle", "walk", "crouch", "jump"] or (str(f.state) == "attack" and bool(f.can_cancel)))
+	return not bool(f.juggle_fall) and int(f.stun) <= 0 and (str(f.state) in ["idle", "walk", "crouch", "jump"] or (str(f.state) == "attack" and bool(f.can_cancel)))
 
 func _can_guard(f: Dictionary) -> bool:
 	return str(f.state) in ["idle", "walk", "crouch", "hurt", "blockstun", "big_capture"] and (int(f.stun) <= 0 or str(f.state) in ["blockstun", "big_capture"])
@@ -246,17 +284,25 @@ func _can_guard(f: Dictionary) -> bool:
 func _protected(f: Dictionary) -> bool:
 	return str(f.state) in ["down", "getup"] or int(f.hp) <= 0
 
-func _start_regular(i: int, move_name: String) -> void:
+func _regular_variant(f: Dictionary, move_name: String, down: bool) -> String:
+	if move_name == "heavy" and (down or str(f.state) == "crouch"):
+		return "uppercut"
+	if move_name == "kick" and down:
+		return "low_kick"
+	return move_name
+
+func _start_regular(i: int, move_name: String, resolve_variant: bool = true) -> void:
 	var f: Dictionary = fighters[i]
-	if move_name == "heavy" and (bool(f.down) or str(f.state) == "crouch"):
-		move_name = "uppercut"
+	if resolve_variant:
+		move_name = _regular_variant(f, move_name, bool(f.down))
 	f.state = "attack"
 	f.move = move_name
 	f.attack_frame = 0
 	f.connected = false
 	f.can_cancel = false
 	f.blocking = false
-	f.attack_low = move_name == "low"
+	f.attack_low = move_name in ["low", "low_kick"]
+	f.attack_press = int(f.current_press)
 	events.append({"type": "attack", "attacker": i, "move": move_name})
 
 func _start_throw(i: int) -> void:
@@ -319,7 +365,7 @@ func _tick_fighter(i: int) -> void:
 			if f.prompt.kind == "big":
 				f.meter = mini(int(f.meter), 40)
 			f.prompt = {}
-	if int(f.jump_frame) > 0 and str(f.state) not in ["big_capture", "grabbed"]:
+	if int(f.jump_frame) > 0 and str(f.state) not in ["big_capture", "grabbed", "stunned"]:
 		var arc_frame: int = int(f.jump_frame)
 		if bool(f.normal_jump) and bool(f.double_jump_used):
 			# Continue the parabola below its takeoff height until landing. Its
@@ -334,11 +380,18 @@ func _tick_fighter(i: int) -> void:
 			f.jump_origin = 0
 			f.normal_jump = false
 			f.double_jump_used = false
+			f.launch_used = false
+			_end_juggle(i)
+			if bool(f.juggle_fall):
+				_knockdown(i)
+				return
 			if str(f.state) == "jump":
 				f.state = "landing"
 				f.timer = 4
 	if int(f.stun) > 0:
 		f.stun = int(f.stun) - 1
+		if int(f.stun) == 0 and str(f.state) == "stunned":
+			_finish_juggle_stun(i)
 		if int(f.stun) == 0 and str(f.state) in ["hurt", "blockstun"]:
 			f.state = "jump" if int(f.y) > 0 else "idle"
 		return
@@ -381,7 +434,7 @@ func _tick_attack(i: int) -> void:
 			if _in_attack_range(i, reach, bool(f.attack_low), move_name == "uppercut"):
 				f.connected = true
 				f.can_cancel = true
-				pending_contacts.append({"kind": "regular", "owner": i, "move": move_name, "dog": f.contact_dog})
+				pending_contacts.append({"kind": "regular", "owner": i, "move": move_name, "dog": f.contact_dog, "juggle": int(fighters[1 - i].juggle_window) > 0})
 		if age >= int(data.startup) + int(data.active) + int(data.recovery):
 			f.state = "jump" if int(f.y) > 0 else "idle"
 			f.move = ""
@@ -411,6 +464,14 @@ func _in_attack_range(i: int, reach: int, low: bool, rising: bool = false) -> bo
 	var target: Dictionary = fighters[1 - i]
 	if _protected(target) or str(target.state) in ["big_capture", "grabbed"]:
 		return false
+	if int(target.juggle_window) > 0:
+		# The scripted string reaches the float, including its two low attacks.
+		# Wrong moves also cannot connect through Cin City's shared-health dog.
+		f.contact_dog = false
+		return _juggle_accepts(i, str(f.move)) and absi(int(f.x) - int(target.x)) <= reach and (int(target.x) - int(f.x)) * int(f.facing) >= -35
+	if str(target.state) == "stunned":
+		f.contact_dog = false
+		return absi(int(f.x) - int(target.x)) <= reach and (int(target.x) - int(f.x)) * int(f.facing) >= -35
 	if low and int(target.y) > 25:
 		return false
 	var vertical_ok: bool = absi(int(f.y) - int(target.y)) <= 85
@@ -430,6 +491,10 @@ func _hit_regular(i: int, move_name: String, dog: bool, target_dog: bool = false
 	var target: Dictionary = fighters[1 - i]
 	if _protected(target):
 		return
+	var juggling: bool = int(target.juggle_window) > 0
+	if juggling and (dog or target_dog or not _juggle_accepts(i, move_name)):
+		return
+	var was_stunned: bool = str(target.state) == "stunned"
 	var data: Dictionary = MOVE_DATA[move_name]
 	var damage: int = 6 if dog else int(data.damage) + (int(f.damage_rank) - 1) * 2
 	var low: bool = dog or bool(f.attack_low)
@@ -448,26 +513,42 @@ func _hit_regular(i: int, move_name: String, dog: bool, target_dog: bool = false
 		f.combo_damage = 0
 		f.combo_timer = 0
 	else:
+		if was_stunned:
+			_finish_juggle_stun(1 - i)
 		_damage(i, damage, "dog" if dog else "hit", false)
 		f.meter = mini(60, int(f.meter) + (2 if dog else 4))
 		f.combo_hits = int(f.combo_hits) + 1
 		f.combo_damage = int(f.combo_damage) + damage
 		f.combo_timer = int(data.hitstun) + 3
 		_stagger(1 - i, int(data.hitstun), false)
-		if move_name == "uppercut" and not dog:
+		if juggling:
+			_advance_juggle(1 - i)
+		elif move_name == "uppercut" and not dog and not was_stunned:
 			_launch_uppercut(1 - i)
-		if int(f.combo_hits) >= 5:
+		if int(f.combo_hits) >= 5 and int(target.juggle_window) <= 0 and str(target.state) != "stunned":
 			_knockdown(1 - i)
 			f.combo_timer = 0
 	hitstop = maxi(hitstop, int(data.hitstop))
 
 func _launch_uppercut(index: int) -> void:
 	var target: Dictionary = fighters[index]
-	if str(target.state) in ["big", "big_start", "big_capture"]:
+	if str(target.state) in ["big", "big_start", "big_capture"] or bool(target.launch_used):
 		return
+	target.launch_used = true
+	target.juggle_owner = 1 - index
+	target.juggle_hits = 1
+	target.juggle_window = JUGGLE_WINDOW
+	target.juggle_press = int(fighters[1 - index].input_serial)
+	target.state = "juggle"
+	target.blocking = false
+	target.prompt = {}
+	_repop_uppercut(index, 0)
+
+func _repop_uppercut(index: int, rise: int) -> void:
+	var target: Dictionary = fighters[index]
 	# Rejoin the rising half of the normal arc. Even a double-jumping target
 	# above it is capped at the normal apex, and a launch cannot double jump.
-	var height: int = mini(JUMP_APEX, int(target.y))
+	var height: int = mini(JUMP_APEX, int(target.y) + rise)
 	var launch_frame: int = 1
 	while launch_frame < 21 and int(launch_frame * (42 - launch_frame) / 4) < height:
 		launch_frame += 1
@@ -476,6 +557,46 @@ func _launch_uppercut(index: int) -> void:
 	target.jump_origin = 0
 	target.normal_jump = false
 	target.double_jump_used = false
+
+func _juggle_accepts(i: int, move_name: String) -> bool:
+	var target: Dictionary = fighters[1 - i]
+	var hits: int = int(target.juggle_hits)
+	return int(target.juggle_window) > 0 and int(target.y) > 0 and int(target.juggle_owner) == i and hits > 0 and hits < JUGGLE_SEQUENCE.size() and move_name == JUGGLE_SEQUENCE[hits] and int(fighters[i].attack_press) > int(target.juggle_press)
+
+func _advance_juggle(index: int) -> void:
+	var target: Dictionary = fighters[index]
+	target.juggle_hits = int(target.juggle_hits) + 1
+	target.juggle_press = int(fighters[1 - index].input_serial)
+	target.blocking = false
+	_repop_uppercut(index, 12)
+	if int(target.juggle_hits) == 4:
+		target.juggle_window = 0
+		target.state = "stunned"
+		target.stun = JUGGLE_STUN_FRAMES
+		target.juggle_fall = true
+		fighters[1 - index].combo_timer = JUGGLE_STUN_FRAMES + 3
+	else:
+		target.state = "juggle"
+		target.juggle_window = JUGGLE_WINDOW
+		fighters[1 - index].combo_timer = JUGGLE_WINDOW + 3
+	events.append({"type": "juggle", "attacker": 1 - index, "target": index, "hits": target.juggle_hits, "stunned": str(target.state) == "stunned"})
+
+func _end_juggle(index: int) -> void:
+	var target: Dictionary = fighters[index]
+	target.juggle_owner = -1
+	target.juggle_hits = 0
+	target.juggle_window = 0
+	target.juggle_press = 0
+	if str(target.state) == "juggle":
+		target.state = "hurt" if int(target.stun) > 0 else ("jump" if int(target.y) > 0 else "idle")
+
+func _finish_juggle_stun(index: int) -> void:
+	var target: Dictionary = fighters[index]
+	_end_juggle(index)
+	target.state = "hurt"
+	target.stun = 0
+	target.jump_frame = maxi(22, int(target.jump_frame))
+	target.juggle_fall = true
 
 func _damage(i: int, damage: int, kind: String, blocked: bool, minimum_hp: int = 0) -> void:
 	var target: Dictionary = fighters[1 - i]
@@ -500,6 +621,9 @@ func _knockdown(index: int) -> void:
 	var f: Dictionary = fighters[index]
 	if str(f.state) in ["big_start", "big"]:
 		return
+	_end_juggle(index)
+	f.launch_used = false
+	f.juggle_fall = false
 	f.state = "down"
 	f.timer = KNOCKDOWN_FRAMES
 	f.stun = 0
@@ -542,8 +666,10 @@ func _tick_minor(i: int) -> void:
 func _minor_hit(i: int, damage: int, chip: int, final_hit: bool, target_dog: bool = false) -> void:
 	var f: Dictionary = fighters[i]
 	var target: Dictionary = fighters[1 - i]
-	if _protected(target):
+	if _protected(target) or int(target.juggle_window) > 0:
 		return
+	if str(target.state) == "stunned":
+		_finish_juggle_stun(1 - i)
 	var blocked: bool = _guard_matches(target, bool(f.minor_low)) and not target_dog
 	_damage(i, chip if blocked else damage, "minor_hit", blocked)
 	_stagger(1 - i, 10 if blocked else 14, blocked)
@@ -564,7 +690,9 @@ func _update_projectiles() -> void:
 		var target: Dictionary = fighters[1 - int(p.owner)]
 		var body: bool = absi(int(p.x) - int(target.x)) <= 50 and absi(int(target.y) - int(p.y)) < 90
 		var dog: bool = str(target.id) == "cin" and absi(int(p.x) - int(target.dog_x)) <= 42
-		if (body or dog) and not _protected(target) and str(target.state) not in ["grabbed", "big_capture"]:
+		if (body or dog) and not _protected(target) and int(target.juggle_window) <= 0 and str(target.state) not in ["grabbed", "big_capture"]:
+			if str(target.state) == "stunned":
+				_finish_juggle_stun(1 - int(p.owner))
 			# Attack height is stored with the projectile, independent of owner's next input.
 			var blocked: bool = _guard_matches(target, bool(p.low)) and not dog
 			_damage(int(p.owner), 4 if blocked else 22, "minor_hit", blocked)
@@ -688,7 +816,7 @@ func _update_dogs() -> void:
 		f.dog_cooldown = int(f.dog_cooldown) - 1
 		if int(f.dog_cooldown) <= 0:
 			f.dog_cooldown = 100
-			if not _protected(target) and str(target.state) not in ["big_capture", "grabbed"] and int(target.y) < 40 and absi(int(f.dog_x) - int(target.x)) <= 95:
+			if int(f.juggle_window) <= 0 and str(f.state) != "stunned" and not bool(f.juggle_fall) and not _protected(target) and str(target.state) not in ["big_capture", "grabbed"] and int(target.y) < 40 and absi(int(f.dog_x) - int(target.x)) <= 95:
 				_hit_regular(i, "light", true)
 
 func _update_facing_and_collision() -> void:
@@ -770,6 +898,8 @@ func restore(data: Dictionary) -> void:
 	fighters = data.fighters.duplicate(true)
 	for fighter in fighters:
 		fighter.merge({"jump_origin": 0, "normal_jump": int(fighter.jump_frame) > 0, "double_jump_used": false})
+		fighter.merge({"juggle_owner": -1, "juggle_hits": 0, "juggle_window": 0, "juggle_press": 0, "launch_used": false, "juggle_fall": false,
+			"input_serial": 0, "current_press": 0, "attack_press": 0, "queued_press": 0})
 	projectiles = data.projectiles.duplicate(true)
 	frame = int(data.frame)
 	combat_frame = int(data.combat_frame)

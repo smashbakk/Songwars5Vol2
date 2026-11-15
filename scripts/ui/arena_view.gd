@@ -217,11 +217,11 @@ func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: St
 	var down := state in ["knockdown", "down", "getup", "ko"]
 	var uppercut := move == "uppercut" and state == "attack"
 	var uppercut_age := int(f.get("attack_frame", 0))
-	var crouch := uppercut_age < 8 if uppercut else (bool(f.get("down", false)) or state == "crouch" or move == "low")
+	var crouch := uppercut_age < 8 if uppercut else (bool(f.get("down", false)) or state == "crouch" or move in ["low", "low_kick"])
 	var block := state in ["block", "blocking", "blockstun"] or bool(f.get("blocking", false))
-	var hurt := state in ["hurt", "hitstun", "captured", "grabbed"]
+	var hurt := state in ["hurt", "hitstun", "captured", "grabbed", "juggle", "stunned"]
 	var walk := state == "walk" or state == "walking"
-	var attack := move in ["light", "low", "kick", "heavy", "uppercut", "throw", "minor", "big"] and not down
+	var attack := move in ["light", "low", "kick", "low_kick", "heavy", "uppercut", "throw", "minor", "big"] and not down
 	var bob := sin(float(tick) * 0.13) * 2.0 if not down else 0.0
 	if uppercut and uppercut_age >= 8:
 		bob -= 12.0
@@ -255,9 +255,9 @@ func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: St
 	# Front leg kick or grounded stance.
 	var front_knee := Vector2(18 + gait, -28 if not crouch else -10)
 	var front_foot := Vector2(30 + gait, -2 if not crouch else -20)
-	if attack and move in ["kick", "heavy"]:
-		front_knee = Vector2(48, -54 if move == "kick" else -33)
-		front_foot = Vector2(103, -63 if move == "kick" else -22)
+	if attack and move in ["kick", "heavy", "low_kick"]:
+		front_knee = Vector2(48, -10 if move == "low_kick" else (-54 if move == "kick" else -33))
+		front_foot = Vector2(103, -8 if move == "low_kick" else (-63 if move == "kick" else -22))
 	_limb([Vector2(10, -52), front_knee, front_foot], 17, dark.lightened(0.07))
 	_limb([rear_foot + Vector2(-8, 0), rear_foot + Vector2(7, 0)], 11, accent)
 	_limb([front_foot + Vector2(-8, 0), front_foot + Vector2(11, 0)], 11, accent)

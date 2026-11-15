@@ -190,8 +190,8 @@ func show_layout(first: bool = false) -> void:
 	clear_ui("layout")
 	var col := page("Choose your controls")
 	text(col,"Both layouts use identical damage and timing. Change your layout between matches in Settings.",20,MUTED)
-	button(col,"SIMPLIFIED  /  Pad + Punch + Kick",func(): store.set_setting("layout","simplified"); show_menu(),true)
-	text(col,"Down + Punch gives a low punch; Down + Kick gives an uppercut. Release and press Up again in the air to double jump. Double-tap a direction to prompt a special.",17,MUTED)
+	button(col,"SIMPLIFIED  /  Pad + Punch + Kick + Heavy",func(): store.set_setting("layout","simplified"); show_menu(),true)
+	text(col,"Down + Punch gives a low punch; Down + Kick gives a low kick. Heavy kicks high; Down + Heavy launches an uppercut. Release and press Up again in the air to double jump. Double-tap a direction to prompt a special.",17,MUTED)
 	button(col,"TRADITIONAL  /  Four attacks + Throw + Special",func(): store.set_setting("layout","traditional"); show_menu())
 	if not first: button(col,"Back",show_settings)
 
@@ -464,9 +464,9 @@ func _player_input() -> Dictionary:
 	value.jump=value.jump or Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
 	value.block=value.block or Input.is_physical_key_pressed(KEY_SPACE)
 	if not keyboard_attack.is_empty():value.attack=keyboard_attack;keyboard_attack=""
-	# Resolve simplified attacks after merging devices, so either device can hold Down.
+	# Resolve attack variants after merging devices, so either device can hold Down.
 	if value.attack=="punch":value.attack="low" if value.down else "light"
-	elif value.attack=="kick" and value.down and store.data.settings.layout=="simplified":value.attack="heavy"
+	elif value.attack=="kick" and value.down:value.attack="low_kick"
 	return value
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -512,6 +512,11 @@ func _update_hud() -> void:
 	else:
 		var combo:int=int(sim.fighters[0].combo_hits)
 		fight_status.text="%d HIT COMBO" % combo if combo>1 else ""
+	if sim.countdown<=0 and not sim.round_over and not sim.match_over:
+		for target in sim.fighters:
+			var hits:int=int(target.get("juggle_hits",0))
+			if hits>=2 and (int(target.get("juggle_window",0))>0 or str(target.state)=="stunned"):
+				fight_status.text="P%d  %d HITS%s" % [int(target.get("juggle_owner",0))+1,hits," — STUNNED" if str(target.state)=="stunned" else ""]
 
 func toggle_pause() -> void:
 	if screen!="fight":return
@@ -595,7 +600,8 @@ func show_help(from_pause:bool=false) -> void:
 	if not from_pause:clear_ui("help")
 	var col:=page("The move guide")
 	text(col,"MOVE  WASD / arrows. Up jumps; release and press Up again while airborne for one higher double jump. Steer and attack in the air. Hold Back to block high, Down + Back to block low. Space / HOLD BLOCK is the accessible block control. No air blocking.",18)
-	text(col,"ATTACK  J light punch · U low punch · K kick · I heavy. Down + I / Heavy is a rising uppercut that catches jump-ins. Simplified: Down + J / Punch gives a low punch; Down + K / Kick gives an uppercut. Five regular hits knock down. Attacks chain manually after a clean hit; every hit keeps full damage.",18)
+	text(col,"ATTACK  J light punch · U low punch · K kick · I heavy. Down + I / Heavy is a rising uppercut that catches jump-ins. Down + K / Kick is a low kick in both layouts. Simplified: Down + J / Punch gives a low punch, and Heavy supplies the high kick / uppercut. Five regular hits knock down. Attacks chain manually after a clean hit; every hit keeps full damage.",18)
+	text(col,"JUGGLE  Uppercut → Low punch → standing Heavy (high kick) → Down + Kick. Press each attack after the previous hit connects. Only the next correct move hits during the float; four hits stun for 90 frames and leave the next hit free. Wrong moves whiff. Landing or running out of time ends the string. Each launch permits one string; damage stays unscaled.",18)
 	text(col,"SPECIALS  Double-tap Back with 1 notch, or Forward with 3, then press the prompted attack within 2 seconds. Traditional Special / O opens the same prompt: hold Back for minor, Forward for big. Missing a big prompt costs 1 notch.",18)
 	text(col,"DEFEND  Block within 0.25 seconds of a regular hit to earn half a notch once per engagement. During a big special, tap and keep holding BLOCK / Space for half damage and survival. Jump before capture to evade.",18)
 	text(col,"THROW  Back → Forward → Punch, or L / Throw, at close range with at least 1 notch. Meter is held, not spent: 16 / 22 / 30 damage. When grabbed, Back → Back → Down within 0.6 seconds breaks free.",18)

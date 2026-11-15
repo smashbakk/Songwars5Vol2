@@ -5,7 +5,7 @@ extends SceneTree
 
 func _initialize() -> void:
 	var failures: Array = []
-	var suite_paths: Array = ["res://tests/test_combat.gd", "res://tests/test_air_combat.gd", "res://tests/test_cpu_mobility.gd", "res://tests/test_damage_pacing.gd", "res://tests/test_progression.gd"]
+	var suite_paths: Array = ["res://tests/test_combat.gd", "res://tests/test_air_combat.gd", "res://tests/test_juggle.gd", "res://tests/test_cpu_juggle.gd", "res://tests/test_cpu_mobility.gd", "res://tests/test_damage_pacing.gd", "res://tests/test_progression.gd"]
 	for suite_path in suite_paths:
 		var suite = load(suite_path)
 		if suite == null or not suite.can_instantiate():

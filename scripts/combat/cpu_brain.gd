@@ -1,7 +1,7 @@
 # Property of LiveLayer Technology LLC.
 extends RefCounted
 
-const ATTACK_RANGES = {"light": 108, "low": 115, "kick": 140, "heavy": 165, "uppercut": 120}
+const ATTACK_RANGES = {"light": 108, "low": 115, "kick": 140, "heavy": 165, "uppercut": 120, "low_kick": 140}
 
 # One deterministic brain. Difficulty changes reaction, defense and execution;
 # the opponent's remaining health never changes its behavior.
@@ -18,6 +18,11 @@ var defend_special: bool = false
 var grab_ticks: int = 0
 var break_throw: bool = false
 var last_cancel_start: int = -1
+var juggle_active: bool = false
+var juggle_attempt: bool = false
+var juggle_step: int = 0
+var juggle_wait: int = 0
+var juggle_sent: bool = false
 
 func setup(level: int = 0, seed_value: int = 1) -> void:
 	difficulty = clampi(level, 0, 2)
@@ -33,6 +38,11 @@ func setup(level: int = 0, seed_value: int = 1) -> void:
 	grab_ticks = 0
 	break_throw = false
 	last_cancel_start = -1
+	juggle_active = false
+	juggle_attempt = false
+	juggle_step = 0
+	juggle_wait = 0
+	juggle_sent = false
 
 func _random(limit: int) -> int:
 	rng_state = (rng_state * 48271) % 2147483647
@@ -48,6 +58,7 @@ func decide(sim, index: int) -> Dictionary:
 		think_in = 0
 		prompt_kind = ""
 		defend_special = false
+		juggle_active = false
 		return _neutral()
 	var me: Dictionary = sim.fighters[index]
 	var foe: Dictionary = sim.fighters[1 - index]
@@ -69,6 +80,13 @@ func decide(sim, index: int) -> Dictionary:
 				result["tap"] = "down"
 		return result
 	grab_ticks = 0
+	# A launch is an opportunity, not a guaranteed conversion. React to each
+	# confirmed hit separately; hitstop never consumes the reaction delay or
+	# queues an input ahead of the next step.
+	if int(foe.get("juggle_owner", -1)) == index and int(foe.get("juggle_window", 0)) > 0 and int(foe.get("juggle_hits", 0)) in [1, 2, 3]:
+		intent = _neutral()
+		return _follow_juggle(sim, index)
+	juggle_active = false
 	if bool(me.get("can_cancel", false)):
 		var started_at: int = int(sim.combat_frame) - int(me.get("attack_frame", 0))
 		if started_at != last_cancel_start:
@@ -160,13 +178,42 @@ func decide(sim, index: int) -> Dictionary:
 	intent["tap"] = ""
 	return result
 
+func _follow_juggle(sim, index: int) -> Dictionary:
+	var result: Dictionary = _neutral()
+	var me: Dictionary = sim.fighters[index]
+	var foe: Dictionary = sim.fighters[1 - index]
+	if not juggle_active:
+		juggle_active = true
+		juggle_attempt = _random(100) < [25, 45, 65][difficulty]
+		juggle_step = 0
+	if not juggle_attempt:
+		return result
+	var confirmed: int = int(foe.juggle_hits)
+	if confirmed != juggle_step:
+		juggle_step = confirmed
+		juggle_wait = [5, 3, 1][difficulty] + _random([4, 3, 3][difficulty])
+		juggle_sent = false
+	if int(sim.hitstop) > 0 or juggle_sent:
+		return result
+	juggle_wait -= 1
+	var ready: bool = int(me.get("stun", 0)) <= 0 and (str(me.state) in ["idle", "walk", "crouch", "jump"] or bool(me.get("can_cancel", false)))
+	if juggle_wait > 0 or not ready:
+		return result
+	juggle_sent = true
+	var correct: bool = _random(100) < [65, 80, 92][difficulty]
+	result.attack = ["low", "heavy", "kick"][confirmed - 1] if correct else "light"
+	result.down = correct and confirmed in [1, 3]
+	return result
+
 func snapshot() -> Dictionary:
 	return {"difficulty": difficulty, "rng_state": rng_state, "ticks": ticks,
 		"think_in": think_in, "intent": intent.duplicate(true), "prompt_kind": prompt_kind,
 		"prompt_button": prompt_button, "prompt_wait": prompt_wait,
 		"prompt_answer": prompt_answer, "defend_special": defend_special,
 		"grab_ticks": grab_ticks, "break_throw": break_throw,
-		"last_cancel_start": last_cancel_start}
+		"last_cancel_start": last_cancel_start, "juggle_active": juggle_active,
+		"juggle_attempt": juggle_attempt, "juggle_step": juggle_step,
+		"juggle_wait": juggle_wait, "juggle_sent": juggle_sent}
 
 func restore(saved: Dictionary) -> void:
 	for key in saved:
