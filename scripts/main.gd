@@ -55,6 +55,7 @@ var select_opponent := false
 var paused := false
 var result_wait := 0
 var keyboard_attack := ""
+var key_edges := {}
 var dummy_mode := 0
 var lesson := -1
 var lesson_complete := false
@@ -893,6 +894,20 @@ func _player_input() -> Dictionary:
 	value.down=value.down or keyboard_down
 	value.jump=value.jump or Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
 	value.block=value.block or Input.is_physical_key_pressed(KEY_SPACE)
+	# Keyboard attacks are POLLED like movement, not only event-driven: on
+	# the Chromebook/Android app, key events can fail to reach
+	# _unhandled_key_input while is_physical_key_pressed keeps working —
+	# that is why movement worked but punches did not (CEO report,
+	# Nov 15, 2026). Edge-detected here so holding a key fires once.
+	var attack_keys := {
+		KEY_J: "punch" if store.data.settings.layout == "simplified" else "light",
+		KEY_U: "low", KEY_K: "kick", KEY_I: "heavy", KEY_L: "throw", KEY_O: "special",
+	}
+	for code in attack_keys:
+		var held := Input.is_physical_key_pressed(code)
+		if held and not bool(key_edges.get(code, false)):
+			keyboard_attack = str(attack_keys[code])
+		key_edges[code] = held
 	if not keyboard_attack.is_empty():value.attack=keyboard_attack;keyboard_attack=""
 	# Resolve attack variants after merging devices, so either device can hold Down.
 	if value.attack=="punch":value.attack="low" if value.down else "light"

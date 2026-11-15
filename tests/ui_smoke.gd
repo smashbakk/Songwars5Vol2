@@ -72,6 +72,16 @@ func _key(code: Key, held: bool) -> void:
 	Input.flush_buffered_events()
 	game._unhandled_key_input(event)
 
+func _key_poll(code: Key, held: bool) -> void:
+	# Parse-only injection: updates the Input physical state (and, in a live
+	# tree, dispatches the event) WITHOUT calling the handler directly.
+	var event := InputEventKey.new()
+	event.keycode = code
+	event.physical_keycode = code
+	event.pressed = held
+	Input.parse_input_event(event)
+	Input.flush_buffered_events()
+
 func _uppercut_input(sample: Dictionary, label: String) -> void:
 	for id in Data.IDS:
 		var combat = Sim.new()
@@ -104,6 +114,18 @@ func _combo_inputs(samples: Array, label: String) -> void:
 
 func _keyboard_checks() -> void:
 	var original_layout: String = game.store.data.settings.layout
+	# Polling-path isolation (Nov 15, 2026 fix for the CEO's Chromebook
+	# report): wipe whatever the event handler set, then prove
+	# _player_input() still delivers the punch from the physical key state
+	# alone — the failure mode where key events never reach the handler.
+	game.store.set_setting("layout", "simplified")
+	game.touch.layout = "simplified"
+	game.touch.clear()
+	_key_poll(KEY_J, true)
+	game.keyboard_attack = ""
+	_check(game._player_input().attack == "light", "polled keyboard J delivers punch without the event handler")
+	_key_poll(KEY_J, false)
+	game._player_input()
 	for layout in ["simplified", "traditional"]:
 		game.store.set_setting("layout", layout)
 		game.touch.layout = layout
