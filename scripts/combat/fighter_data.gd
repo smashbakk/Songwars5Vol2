@@ -19,7 +19,21 @@ const FIGHTERS = {
 	"hublo": {"name": "Hublo", "hp": 200, "damage_class": "Standard", "speed_class": "Standard", "reach_class": "Standard", "minor": "lunge", "big_name": "To Be Announced", "big_hits": [16, 16, 36], "color": Color("9fe870")}
 }
 
+# Artist-screen bios (CEO ruling, Nov 15, 2026): the roster shows a small
+# bio and the Special — no game stats. Written from locked canon only.
+const BIOS = {
+	"cin": "The first lady of the Rooftop — and her little Yorkie fights right beside her, off the leash and into the fight.",
+	"rico": "Song Wars 5's own co-presenter, pulled through the phone into the game. There's a wolf in him — fill the meter and it comes out.",
+	"hood": "The biggest shadow on the Rooftop. When the King gives his verdict, nobody argues.",
+	"bank": "First stop on the road to the gate. He doesn't chase the money — he drops jewels.",
+	"smash": "The one who pulled them all into the game. Clear the whole road and you still have to go through him.",
+	"jo": "The management mind of the Core Four — suit sharp, word sharper. He'll put the house on it.",
+	"lmscurt": "Image is the weapon: he changes the outfit and turns the damage up. Push him too far and he drops the BANK.",
+	"hublo": "Hood up, mask on, nothing given away. His special hasn't been announced — and neither has he."
+}
+
 static func get_fighter(id: String) -> Dictionary:
 	var result: Dictionary = FIGHTERS.get(id, FIGHTERS["cin"]).duplicate(true)
 	result["id"] = id if FIGHTERS.has(id) else "cin"
+	result["bio"] = str(BIOS.get(result["id"], ""))
 	return result

@@ -14,6 +14,7 @@ const PORTRAITS = {
 	"hood": "res://assets/menu/portrait_hood.png",
 	"bank": "res://assets/menu/portrait_bank.jpg",
 	"smash": "res://assets/menu/portrait_smash.jpg",
+	"smash_armored": "res://assets/menu/portrait_smash_armored.jpg",
 	"jo": "res://assets/menu/portrait_jo.jpg",
 	"lmscurt": "res://assets/menu/portrait_lmscurt.jpg",
 	"hublo": "res://assets/menu/portrait_hublo.png",
@@ -29,6 +30,11 @@ const INK = Color("0c1329")
 const PALE = Color("e7ecff")
 const MUTED = Color("a1adcc")
 const HEALTH_NAMES := ["Standard", "Tough", "Rugged", "Hardened", "Fortified", "Unbreakable"]
+# Smash gating (CEO ruling, Nov 15, 2026): both Smash forms are playable by
+# the CEO and admins only. Regular users see them on the select screen but
+# cannot pick either; Smash stays pickable as the opponent they face. The
+# admin code unlocks both forms for the current session only.
+const ADMIN_CODE := "LYVE"
 
 var store = SaveStore.new()
 var arena: Control
@@ -39,6 +45,9 @@ var cpu: RefCounted
 var screen := "menu"
 var mode := "cpu"
 var selected := "cin"
+var selected_variant := ""
+var admin_unlocked := false
+var admin_note := ""
 var opponent := "bank"
 var difficulty := 1
 var story_index := 0
@@ -528,8 +537,8 @@ func show_roster() -> void:
 		grid.add_child(card)
 		card.add_child(_portrait_rect(id, 120))
 		text(card, str(info.name), 22)
-		text(card, "%s damage • %s speed • %s reach" % [info.damage_class, info.speed_class, info.reach_class], 15, MUTED)
-		text(card, "Big: " + str(info.big_name), 15, TEAL)
+		text(card, str(info.bio), 16, MUTED)
+		text(card, "Special: " + str(info.big_name), 15, TEAL)
 	button(col, "Back", show_menu)
 
 func show_new_additions() -> void:
@@ -594,7 +603,26 @@ func show_select() -> void:
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(card)
 		card.add_child(_portrait_rect(id, 150))
-		button(card,info.name,func():_pick_fighter(id))
+		if id == "smash" and not select_opponent and not admin_unlocked:
+			var locked := button(card, "Smash — Admin", func(): pass)
+			locked.disabled = true
+		else:
+			button(card,info.name,func():_pick_fighter(id))
+	if not select_opponent:
+		var acard := VBoxContainer.new()
+		acard.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(acard)
+		acard.add_child(_portrait_rect("smash_armored", 150))
+		if admin_unlocked:
+			button(acard, "Armored Smash", _pick_armored)
+		else:
+			var alocked := button(acard, "Armored Smash — Admin", func(): pass)
+			alocked.disabled = true
+		if admin_unlocked:
+			text(col, "ADMIN MODE — Smash is unlocked for this session.", 15, GOLD)
+		else:
+			text(col, "Smash is the boss: you face him, you don't pick him. Admins unlock both forms.", 15, MUTED)
+			button(col, "Admin unlock", show_admin_unlock)
 	if mode == "cpu":
 		var h := row(col)
 		for i in 3:
@@ -607,13 +635,47 @@ func show_select() -> void:
 		else:show_menu())
 
 func _pick_fighter(id: String) -> void:
+	if id == "smash" and not select_opponent and not admin_unlocked:
+		return
 	if select_opponent:
 		opponent=id
 		start_fight()
 	else:
 		selected=id
+		selected_variant=""
 		if mode=="story":show_preview()
 		else:select_opponent=true;show_select()
+
+func _pick_armored() -> void:
+	if not admin_unlocked:
+		return
+	selected = "smash"
+	selected_variant = "armored"
+	if mode == "story": show_preview()
+	else: select_opponent = true; show_select()
+
+func show_admin_unlock() -> void:
+	clear_ui("admin_unlock")
+	_menu_backdrop()
+	var col := page("Admin unlock", "ADMIN / SMASH ACCESS")
+	text(col, "Smash — both forms — is an admin pick. Enter the admin code to unlock him for this session.", 18, MUTED)
+	var entry := LineEdit.new()
+	entry.secret = true
+	entry.placeholder_text = "Admin code"
+	entry.custom_minimum_size.y = 50
+	col.add_child(entry)
+	if admin_note != "":
+		text(col, admin_note, 16, GOLD)
+	button(col, "Unlock", func():
+		if entry.text.strip_edges().to_upper() == ADMIN_CODE:
+			admin_unlocked = true
+			admin_note = ""
+			select_opponent = false
+			show_select()
+		else:
+			admin_note = "That code doesn't open it."
+			show_admin_unlock())
+	button(col, "Back", show_select)
 
 func show_preview() -> void:
 	clear_ui("preview")
@@ -1097,6 +1159,7 @@ func _relayout() -> void:
 		"settings":show_settings()
 		"help":show_help()
 		"roster":show_roster()
+		"admin_unlock":show_admin_unlock()
 		"new_additions":show_new_additions()
 		"boot","press_start":pass
 		"story":

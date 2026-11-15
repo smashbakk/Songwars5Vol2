@@ -316,6 +316,18 @@ func _front_door_checks() -> void:
 		if node is TextureRect and node.texture != null and str(node.texture.resource_path).contains("portrait_"):
 			portraits += 1
 	_check(portraits == 8, "roster shows all eight real portraits (saw %d)" % portraits)
+	# Artist screen (CEO ruling, Nov 15, 2026): small bios + "Special:" only —
+	# no game-stat lines anywhere on the roster.
+	var specials := 0
+	var stat_lines := 0
+	for node in _nodes(game.ui):
+		if node is Label:
+			if node.text.begins_with("Special:"):
+				specials += 1
+			if node.text.contains("damage •"):
+				stat_lines += 1
+	_check(specials == 8, "roster shows a Special line for all eight artists (saw %d)" % specials)
+	_check(stat_lines == 0, "roster shows no game-stat lines (saw %d)" % stat_lines)
 	game.mode = "cpu"
 	game.select_opponent = false
 	game.show_select()
@@ -324,7 +336,27 @@ func _front_door_checks() -> void:
 	for node in _nodes(game.ui):
 		if node is TextureRect and node.texture != null and str(node.texture.resource_path).contains("portrait_"):
 			portraits += 1
-	_check(portraits == 8, "character select shows all eight real portraits (saw %d)" % portraits)
+	_check(portraits == 9, "character select shows eight fighters plus the visible armored variant (saw %d)" % portraits)
+	# Smash gating (CEO ruling, Nov 15, 2026): users see both Smash forms but
+	# cannot pick either; the admin code unlocks both for the session.
+	var smash_locked := false
+	for node in _nodes(game.ui):
+		if node is Button and node.text == "Smash — Admin" and node.disabled:
+			smash_locked = true
+	_check(smash_locked, "standard Smash is visible but locked for regular users")
+	game.show_admin_unlock()
+	await _settle()
+	for node in _nodes(game.ui):
+		if node is LineEdit:
+			node.text = "LYVE"
+	await _press("Unlock")
+	_check(game.admin_unlocked, "admin code unlocks Smash for the session")
+	_check(game.screen == "select", "unlock returns to character select")
+	var armored_enabled := false
+	for node in _nodes(game.ui):
+		if node is Button and node.text == "Armored Smash" and not node.disabled:
+			armored_enabled = true
+	_check(armored_enabled, "armored Smash is pickable after admin unlock")
 	game.show_new_additions()
 	await _settle()
 	_check(game.screen == "new_additions", "new additions slot opens")
