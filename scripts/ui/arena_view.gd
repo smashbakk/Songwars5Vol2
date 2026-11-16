@@ -12,6 +12,184 @@ var _world_offset := Vector2.ZERO
 const INK := Color("101426")
 const SKY := Color("11152f")
 const CREAM := Color("f3ead8")
+
+# v8 sprite package (assets/fighters/, 366 QC-passed poses). Rendering only:
+# the sim never reads this. Scale is set ONCE per form from its idle anchor
+# (470 standard, 500 wolf) and never rescaled per pose; the canvas ground
+# point (320, 599) lands on the fighter's floor position, flipped by facing.
+const SPRITE_PREFIXES := {
+	"cin": "cin-city",
+	"rico": "rico-ruffino",
+	"hood": "big-hood",
+	"bank": "bank-sinatra",
+	"smash": "tyshawn-smash",
+	"jo": "jo-nextlevel",
+	"lmscurt": "lmscurt",
+	"hublo": "hublo",
+}
+const SPRITE_FIGURE_HEIGHT := 240.0
+const SPRITE_GROUND := Vector2(320, 599)
+var _sprite_cache: Dictionary = {}
+var _backdrop_cache: Texture2D = null
+var _ctx_countdown: int = 0
+var _ctx_round_over: bool = false
+var _ctx_winner: int = -1
+var _ctx_inputs: Array = []
+
+func _sprite_scale(prefix: String) -> float:
+	if prefix == "rico-wolf":
+		return SPRITE_FIGURE_HEIGHT / 500.0
+	return SPRITE_FIGURE_HEIGHT / 470.0
+
+func _sprite_texture(prefix: String, pose: String) -> Texture2D:
+	var key := prefix + "/" + pose
+	if _sprite_cache.has(key):
+		return _sprite_cache[key]
+	var path := "res://assets/fighters/" + prefix + "-" + pose + ".png"
+	var tex: Texture2D = null
+	if ResourceLoader.exists(path):
+		tex = load(path) as Texture2D
+	_sprite_cache[key] = tex
+	return tex
+
+func _backdrop_texture() -> Texture2D:
+	if _backdrop_cache == null:
+		_backdrop_cache = load("res://assets/menu/rooftop-night.jpg") as Texture2D
+	return _backdrop_cache
+
+# Form = which sprite set a fighter is wearing right now. Transformations
+# (CEO ruling, Nov 15 2026) play QUICK and EXPLOSIVE: Rico bursts through
+# the five morph frames in ~0.5s at the start of his big, then fights as
+# the wolf for the rest of the sequence; Smash flickers gold/base through
+# the same window, then stays gold. The sim has no transformation state,
+# so the swap rides the big-special states it already exposes.
+func _sprite_form(id: String, f: Dictionary) -> Array:
+	var state := str(f.get("state", "idle"))
+	var move := str(f.get("move", ""))
+	var age := int(f.get("attack_frame", 0))
+	if id == "rico":
+		if state == "big_start":
+			if age < 30:
+				return ["rico-wolf", "morph-%d" % (mini(4, age / 6) + 1)]
+			return ["rico-wolf", ""]
+		if state == "big" or (state == "recovery" and move == "big"):
+			return ["rico-wolf", ""]
+		return ["rico-ruffino", ""]
+	if id == "smash":
+		if state == "big_start":
+			if age < 30:
+				if (age / 3) % 2 == 0:
+					return ["tyshawn-smash-gold", ""]
+				return ["tyshawn-smash", ""]
+			return ["tyshawn-smash-gold", ""]
+		if state == "big" or (state == "recovery" and move == "big"):
+			return ["tyshawn-smash-gold", ""]
+		return ["tyshawn-smash", ""]
+	return [str(SPRITE_PREFIXES.get(id, "bank-sinatra")), ""]
+
+func _attack_pose(id: String, f: Dictionary, move: String) -> String:
+	match move:
+		"light":
+			return "punch"
+		"low":
+			return "low-punch"
+		"kick":
+			return "kick"
+		"low_kick":
+			return "sweep"
+		"heavy":
+			return "roundhouse"
+		"uppercut":
+			if bool(f.get("down", false)):
+				return "crouch-uppercut"
+			return "uppercut"
+		"throw":
+			return "throw"
+		"minor":
+			var mold := str(f.get("minor", "lunge"))
+			if mold == "projectile":
+				return "throw"
+			if mold == "multi":
+				if int(f.get("attack_frame", 0)) < 14:
+					return "punch"
+				return "kick"
+			if id == "cin":
+				return "special-dog-lunge"
+			return "lunge"
+		"big":
+			return "finisher"
+	return "punch"
+
+func _sprite_pose(id: String, f: Dictionary, state: String, move: String, tick: int, index: int) -> String:
+	if sim != null and _ctx_countdown > 0:
+		return "intro"
+	if sim != null and _ctx_round_over:
+		if _ctx_winner == index:
+			if tick % 240 >= 180:
+				return "win-jump"
+			return "win"
+		return "ko"
+	if bool(f.get("blocking", false)) and state in ["idle", "walk", "crouch"]:
+		return "block"
+	match state:
+		"idle":
+			var cycle: Array = ["idle", "idle-1", "idle-2", "idle-3", "idle-4"]
+			return str(cycle[(tick / 30) % cycle.size()])
+		"walk":
+			var axis := int(f.get("prev_move", 0))
+			if index >= 0 and index < _ctx_inputs.size() and _ctx_inputs[index] is Dictionary:
+				axis = int(_ctx_inputs[index].get("move", axis))
+			if axis != 0 and axis == -int(f.get("facing", 1)):
+				return "back"
+			var steps: Array = ["walk-1", "walk-2", "walk-3", "walk-4"]
+			return str(steps[(tick / 7) % steps.size()])
+		"crouch":
+			return "crouch"
+		"jump", "landing":
+			return "jump"
+		"attack":
+			return _attack_pose(id, f, move)
+		"throw_hold":
+			return "throw"
+		"big_start", "big":
+			return "finisher"
+		"hurt", "juggle", "grabbed", "big_capture":
+			return "hurt"
+		"blockstun":
+			return "block"
+		"stunned":
+			return "dizzy"
+		"down":
+			return "ko"
+		"getup":
+			return "getup"
+		"recovery":
+			return "idle"
+	return "idle"
+
+func _draw_fighter_sprite(id: String, at: Vector2, facing: int, state: String, move: String, tick: int, alternate: bool, f: Dictionary, index: int) -> bool:
+	var form: Array = _sprite_form(id, f)
+	var prefix := str(form[0])
+	var pose := str(form[1])
+	if pose.is_empty():
+		pose = _sprite_pose(id, f, state, move, tick, index)
+	var tex := _sprite_texture(prefix, pose)
+	if tex == null:
+		return false
+	# Soft ground shadow, shrinking as the fighter leaves the floor.
+	var air := clampf(float(f.get("y", 0)) / 240.0, 0.0, 1.0)
+	var shadow_w := 112.0 - air * 42.0
+	var shadow_h := 13.0 - air * 4.0
+	draw_set_transform(_world_offset, 0, _world_scale)
+	_ellipse(Rect2(at.x - shadow_w / 2.0, 511.0 - shadow_h / 2.0, shadow_w, shadow_h), Color(0.03, 0.03, 0.07, 0.50 - air * 0.22))
+	var s := _sprite_scale(prefix)
+	draw_set_transform(_world_offset + Vector2(at.x, at.y + 2.0) * _world_scale, 0, Vector2(facing * s, s) * _world_scale)
+	var tint := Color.WHITE
+	if alternate:
+		tint = Color(0.70, 0.80, 1.12)
+	draw_texture(tex, -SPRITE_GROUND, tint)
+	draw_set_transform(_world_offset, 0, _world_scale)
+	return true
 const PALETTES := {
 	"cin": [Color("28c5bc"), Color("ef799d"), Color("b97653"), Color("33242e")],
 	"rico": [Color("d65055"), Color("d9d9e1"), Color("b88062"), Color("25283b")],
@@ -35,7 +213,20 @@ func _draw() -> void:
 		_world_scale = Vector2.ONE * size.x / 1280.0
 		_world_offset.y = maxf(160.0, (size.y - size.x * 720.0 / 1280.0) / 2.0 - 70.0)
 	draw_set_transform(_world_offset, 0, _world_scale)
-	_draw_rooftop()
+	_ctx_countdown = 0
+	_ctx_round_over = false
+	_ctx_winner = -1
+	_ctx_inputs = []
+	# The fight arena stages on the real Rooftop photograph; menus and
+	# story keep the illustrated set.
+	var staged_on_photo := false
+	if scene_mode == "fight":
+		var backdrop := _backdrop_texture()
+		if backdrop != null:
+			draw_texture_rect(backdrop, Rect2(0, 0, 1280, 720), false)
+			staged_on_photo = true
+	if not staged_on_photo:
+		_draw_rooftop()
 	if scene_mode == "story" and gate_phase > 0:
 		_draw_gate()
 	elif scene_mode == "fight" and sim != null and sim.get("fighters") != null:
@@ -134,6 +325,11 @@ func _draw_building(x: float, y: float, width: float, height: float, color: Colo
 func _draw_fight() -> void:
 	var tick := int(sim.get("frame"))
 	var fighters: Array = sim.get("fighters")
+	_ctx_countdown = int(sim.get("countdown"))
+	_ctx_round_over = bool(sim.get("round_over"))
+	_ctx_winner = int(sim.get("winner"))
+	var inputs_now = sim.get("last_inputs")
+	_ctx_inputs = inputs_now if inputs_now is Array else []
 	# Dogs share their partner's protection and HP; their separate pose is visual.
 	for f in fighters:
 		if str(f.get("id", "")) == "cin":
@@ -143,7 +339,7 @@ func _draw_fight() -> void:
 		var id := str(f.get("id", fighter_ids[index]))
 		var at := Vector2(float(f.get("x", 400 + index * 480)), 510 - float(f.get("y", 0)))
 		var state := str(f.get("state", "idle"))
-		_draw_fighter(id, at, int(f.get("facing", 1)), state, str(f.get("move", "")), tick, index == 1 and fighter_ids[0] == fighter_ids[1], f)
+		_draw_fighter(id, at, int(f.get("facing", 1)), state, str(f.get("move", "")), tick, index == 1 and fighter_ids[0] == fighter_ids[1], f, index)
 	var projectiles = sim.get("projectiles")
 	if projectiles is Array:
 		for shot in projectiles:
@@ -203,7 +399,11 @@ func _draw_gate() -> void:
 	_draw_fighter(str(fighter_ids[0]) if fighter_ids.size() > 0 else "cin", Vector2(365, 515), 1, "idle", "", 0, false, {})
 	_label("LiveLayer Technology LLC", Vector2(653, 506), 13, Color("97889b"))
 
-func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: String, tick: int, alternate: bool, f: Dictionary) -> void:
+func _draw_fighter(id: String, at: Vector2, facing: int, state: String, move: String, tick: int, alternate: bool, f: Dictionary, index: int = 0) -> void:
+	# v8: the real sprite art is the fighter look. The procedural stand-in
+	# below remains only as a fallback if a pose texture ever fails to load.
+	if _draw_fighter_sprite(id, at, facing, state, move, tick, alternate, f, index):
+		return
 	var palette: Array = PALETTES.get(id, PALETTES.bank)
 	var coat: Color = palette[0]
 	var accent: Color = palette[1]
