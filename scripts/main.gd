@@ -8,6 +8,9 @@ const SaveStore = preload("res://scripts/progression/save_store.gd")
 const Story = preload("res://scripts/progression/story_data.gd")
 const Arena = preload("res://scripts/ui/arena_view.gd")
 const Touch = preload("res://scripts/ui/touch_controls.gd")
+const AudioHooks = preload("res://scripts/ui/audio_hooks.gd")
+const MenuBackdrop = preload("res://scripts/ui/menu_backdrop.gd")
+const PortraitFrame = preload("res://scripts/ui/portrait_frame.gd")
 const PORTRAITS = {
 	"cin": "res://assets/menu/portrait_cin.jpg",
 	"rico": "res://assets/menu/portrait_rico.jpg",
@@ -75,6 +78,9 @@ var prompt_label: Label
 var scene_continue: Button
 var pending_result := false
 var audio_player: AudioStreamPlayer
+var audio_hooks: Node
+var fight_accumulator := 0.0
+var ko_slow_remaining := 0.0
 var relayout_pending := false
 var menu_textures: Dictionary = {}
 var boot_elapsed := 0.0
@@ -103,6 +109,8 @@ func _ready() -> void:
 	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	audio_player = AudioStreamPlayer.new()
 	add_child(audio_player)
+	audio_hooks = AudioHooks.new()
+	add_child(audio_hooks)
 	get_tree().root.size_changed.connect(_window_resized)
 	resized.connect(_request_relayout)
 	_window_resized()
@@ -115,12 +123,38 @@ func _setup_theme() -> void:
 	t.set_color("font_color", "Button", PALE)
 	t.set_color("font_hover_color", "Button", TEAL)
 	t.set_color("font_disabled_color", "Button", MUTED)
-	t.set_stylebox("normal", "Button", box(Color("18223c"), Color("344363")))
-	t.set_stylebox("hover", "Button", box(Color("203850"), TEAL))
-	t.set_stylebox("pressed", "Button", box(Color("225b61"), TEAL))
+	t.set_stylebox("normal", "Button", box(Color("142d48"), Color("427da5"), 3))
+	t.set_stylebox("hover", "Button", box(Color("174e70"), Color("55ceff"), 3))
+	t.set_stylebox("pressed", "Button", box(Color("08799c"), Color("b7f2ff"), 3))
 	t.set_stylebox("focus", "Button", box(Color(0,0,0,0), GOLD))
 	t.set_stylebox("disabled", "Button", box(Color("111a30"), Color("29324c")))
-	t.set_constant("outline_size", "Label", 0)
+	t.set_stylebox("normal", "LineEdit", box(Color("142d48"), Color("427da5"), 3))
+	t.set_stylebox("focus", "LineEdit", box(Color("163b56"), Color("55ceff"), 3))
+	t.set_stylebox("read_only", "LineEdit", box(Color("111a30"), Color("29324c"), 3))
+	# Style scrollbars and option menus along with the primary buttons.
+	for kind in ["VScrollBar", "HScrollBar"]:
+		var track := StyleBoxFlat.new()
+		track.bg_color = Color("10233a")
+		track.set_corner_radius_all(3)
+		var thumb := StyleBoxFlat.new()
+		thumb.bg_color = Color("3884a9")
+		thumb.set_corner_radius_all(3)
+		thumb.content_margin_left = 4
+		thumb.content_margin_right = 4
+		thumb.content_margin_top = 4
+		thumb.content_margin_bottom = 4
+		t.set_stylebox("scroll", kind, track)
+		t.set_stylebox("grabber", kind, thumb)
+		t.set_stylebox("grabber_highlight", kind, thumb)
+		t.set_stylebox("grabber_pressed", kind, thumb)
+	for state_name in ["normal", "hover", "pressed", "focus", "disabled"]:
+		t.set_stylebox(state_name, "OptionButton", t.get_stylebox(state_name, "Button"))
+	t.set_stylebox("panel", "PopupMenu", box(Color("10243a"), Color("427da5"), 3))
+	t.set_stylebox("hover", "PopupMenu", box(Color("174e70"), Color("55ceff"), 3))
+	t.set_color("font_color", "PopupMenu", PALE)
+	t.set_color("font_hover_color", "PopupMenu", Color("9ee8ff"))
+	t.set_constant("outline_size", "Label", 1)
+	t.set_color("font_outline_color", "Label", Color("101b30"))
 	t.set_constant("separation", "VBoxContainer", 12)
 	t.set_constant("separation", "HBoxContainer", 12)
 	theme = t
@@ -152,6 +186,8 @@ func clear_ui(next_screen: String) -> void:
 	arena.fighter_ids = [selected, opponent]
 
 func page(title: String, eyebrow: String = "SONG WARS 5 / VOL. 2") -> VBoxContainer:
+	if screen != "fight" and not ui.has_node("MenuBackdrop"):
+		_menu_backdrop()
 	var backdrop := ColorRect.new()
 	backdrop.color = Color(0.015, 0.025, 0.065, 0.56)
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -170,7 +206,7 @@ func page(title: String, eyebrow: String = "SONG WARS 5 / VOL. 2") -> VBoxContai
 	scroll.add_child(center)
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size.x = minf(size.x - 64, 660)
-	panel.add_theme_stylebox_override("panel", box(Color(0.035,0.055,0.11,0.96),Color("344363"),20))
+	panel.add_theme_stylebox_override("panel", box(Color(0.025,0.055,0.12,0.86),Color("357baa"),5))
 	center.add_child(panel)
 	var col := VBoxContainer.new()
 	panel.add_child(col)
@@ -196,6 +232,13 @@ func button(parent: Node, value: String, callback: Callable, accent: bool = fals
 	b.custom_minimum_size.y = 50
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if accent: b.add_theme_color_override("font_color", TEAL)
+	b.mouse_entered.connect(func():
+		if not b.disabled:
+			audio_hooks.play_hook("ui_move", bool(store.data.settings.muted)))
+	b.focus_entered.connect(func():
+		if not b.disabled:
+			audio_hooks.play_hook("ui_move", bool(store.data.settings.muted)))
+	b.pressed.connect(func(): audio_hooks.play_hook("ui_pick", bool(store.data.settings.muted)))
 	b.pressed.connect(callback)
 	parent.add_child(b)
 	return b
@@ -487,40 +530,21 @@ func _menu_texture(path: String) -> Texture2D:
 	return tex
 
 func _menu_backdrop() -> void:
-	var tex := _menu_texture(ROOFTOP_ART)
-	if tex == null:
+	if ui.has_node("MenuBackdrop"):
 		return
-	var t := TextureRect.new()
-	t.texture = tex
-	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	t.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	t.modulate = Color(0.55, 0.6, 0.8, 1)
-	ui.add_child(t)
+	var backdrop := MenuBackdrop.new()
+	backdrop.name = "MenuBackdrop"
+	backdrop.rooftop = _menu_texture(ROOFTOP_ART)
+	ui.add_child(backdrop)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.move_child(backdrop, 0)
 
-func _portrait_rect(id: String, height: float) -> Control:
-	var tex := _menu_texture(PORTRAITS.get(id, ""))
-	if tex != null:
-		var t := TextureRect.new()
-		t.texture = tex
-		t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		t.custom_minimum_size.y = height
-		t.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		return t
-	var info: Dictionary = Data.get_fighter(id)
-	var rect := ColorRect.new()
-	rect.color = Color(info.color) * Color(0.4, 0.4, 0.4, 1)
-	rect.custom_minimum_size.y = height
-	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var mark := Label.new()
-	mark.text = str(info.name).substr(0, 1)
-	mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	mark.add_theme_font_size_override("font_size", 38)
-	mark.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	rect.add_child(mark)
-	return rect
+func _portrait_rect(id: String, height: float, locked: bool = false) -> Control:
+	var frame := PortraitFrame.new()
+	frame.texture = _menu_texture(PORTRAITS.get(id, ""))
+	frame.locked = locked
+	frame.custom_minimum_size.y = height
+	return frame
 
 func show_roster() -> void:
 	clear_ui("roster")
@@ -565,7 +589,7 @@ func show_menu() -> void:
 	button(h,"Settings",show_settings)
 	button(h,"Move guide",show_help)
 	if not notices.is_empty(): text(col,notices,16,GOLD)
-	text(col,"PASS 2 • FRONT DOOR BUILD\nProperty of LiveLayer Technology LLC.",14,MUTED)
+	text(col,"Powered By LiveLayerTech.net",14,TEAL)
 
 func show_layout(first: bool = false) -> void:
 	clear_ui("layout")
@@ -581,11 +605,10 @@ func show_settings() -> void:
 	var col := page("Settings")
 	button(col,"Control layout: " + str(store.data.settings.layout).capitalize(),func():show_layout())
 	button(col,"Subtitles: " + ("ON" if store.data.settings.subtitles else "OFF"),func():store.set_setting("subtitles",not store.data.settings.subtitles);show_settings())
-	button(col,"Placeholder sound effects: " + ("MUTED" if store.data.settings.muted else "ON"),func():store.set_setting("muted",not store.data.settings.muted);show_settings())
+	button(col,"Sound effects: " + ("MUTED" if store.data.settings.muted else "ON"),func():store.set_setting("muted",not store.data.settings.muted);show_settings())
 	button(col,"Portrait fights: " + ("ENABLED" if store.data.settings.portrait_fights else "Landscape recommended"),func():store.set_setting("portrait_fights",not store.data.settings.portrait_fights);show_settings())
-	button(col,"Tester story limit bypass: " + ("ON" if store.data.settings.tester_bypass else "OFF"),func():store.set_setting("tester_bypass",not store.data.settings.tester_bypass);show_settings())
-	text(col,"Progress is saved on this device. Story attempts reset at 00:00 and 12:00 UTC in this offline prototype. Tester bypass is available for this testing build.",17,MUTED)
-	text(col,"Save: " + ProjectSettings.globalize_path(store.save_path),14,MUTED)
+	button(col,"Unlimited story attempts: " + ("ON" if store.data.settings.tester_bypass else "OFF"),func():store.set_setting("tester_bypass",not store.data.settings.tester_bypass);show_settings())
+	text(col,"Progress is saved on this device. Story attempts reset at 00:00 and 12:00 UTC.",17,MUTED)
 	button(col,"Back",show_menu)
 
 func show_select() -> void:
@@ -603,26 +626,32 @@ func show_select() -> void:
 		var card := VBoxContainer.new()
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(card)
-		card.add_child(_portrait_rect(id, 150))
-		if id == "smash" and not select_opponent and not admin_unlocked:
-			var locked := button(card, "Smash — Admin", func(): pass)
+		var portrait := _portrait_rect(id, 150, id == "smash" and not admin_unlocked)
+		card.add_child(portrait)
+		if id == "smash" and not admin_unlocked:
+			var locked := button(card, "Smash — LOCKED", func(): pass)
 			locked.disabled = true
 		else:
-			button(card,info.name,func():_pick_fighter(id))
+			var pick := button(card,info.name,func():_pick_fighter(id))
+			pick.mouse_entered.connect(func(): portrait.set_active(true))
+			pick.mouse_exited.connect(func(): portrait.set_active(false))
+			pick.focus_entered.connect(func(): portrait.set_active(true))
+			pick.focus_exited.connect(func(): portrait.set_active(false))
 	if not select_opponent:
 		var acard := VBoxContainer.new()
 		acard.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(acard)
-		acard.add_child(_portrait_rect("smash_armored", 150))
+		acard.add_child(_portrait_rect("smash_armored", 150, not admin_unlocked))
 		if admin_unlocked:
 			button(acard, "Armored Smash", _pick_armored)
 		else:
-			var alocked := button(acard, "Armored Smash — Admin", func(): pass)
+			var alocked := button(acard, "Armored Smash — LOCKED", func(): pass)
+			alocked.add_theme_font_size_override("font_size", 15)
 			alocked.disabled = true
 		if admin_unlocked:
 			text(col, "ADMIN MODE — Smash is unlocked for this session.", 15, GOLD)
 		else:
-			text(col, "Smash is the boss: you face him, you don't pick him. Admins unlock both forms.", 15, MUTED)
+			text(col, "Smash is locked. Admins can unlock both forms.", 15, MUTED)
 			button(col, "Admin unlock", show_admin_unlock)
 	if mode == "cpu":
 		var h := row(col)
@@ -636,7 +665,7 @@ func show_select() -> void:
 		else:show_menu())
 
 func _pick_fighter(id: String) -> void:
-	if id == "smash" and not select_opponent and not admin_unlocked:
+	if id == "smash" and not admin_unlocked:
 		return
 	if select_opponent:
 		opponent=id
@@ -688,7 +717,7 @@ func show_preview() -> void:
 	text(col,"Bank Sinatra  →  Rico Ruffino  →  Big Hood Tha King",18,TEAL)
 	text(col,"%s\nvs %s" % [Data.get_fighter(selected).name,Data.get_fighter(opponent).name],26)
 	var attempts: int = store.attempts_remaining(fight.id)
-	text(col,"Rooftop • Best of 3 • Easy CPU\n%s" % ("Tester bypass active" if store.data.settings.tester_bypass else "%d / 3 attempts remaining this period" % attempts),18,MUTED)
+	text(col,"Rooftop • Best of 3 • Easy CPU\n%s" % ("Unlimited attempts" if store.data.settings.tester_bypass else "%d / 3 attempts remaining this period" % attempts),18,MUTED)
 	if not notices.is_empty():text(col,notices,16,GOLD)
 	var start := button(col,"Enter the Rooftop",start_story_attempt,true)
 	start.disabled=attempts<=0 and not store.data.settings.tester_bypass
@@ -780,10 +809,14 @@ func start_fight() -> void:
 	clear_ui("fight")
 	result_wait=0
 	pending_result=false
+	fight_accumulator=0.0
+	ko_slow_remaining=0.0
 	lesson_complete=false
 	var up: Dictionary=store.get_upgrades(selected) if mode=="story" else {}
 	sim=Simulation.new()
 	sim.setup(selected,opponent,up,{},mode=="training",7421)
+	# Intro pacing is presentation only; the deterministic combat model stays intact.
+	sim.countdown = 78
 	cpu=Brain.new()
 	cpu.setup(0 if mode=="story" else difficulty,291)
 	arena.sim=sim
@@ -799,6 +832,9 @@ func _build_hud() -> void:
 	ui.add_child(margin)
 	var col:=VBoxContainer.new();margin.add_child(col)
 	var h:=row(col)
+	# Preserve layout and legacy readouts for programmatic access; the drawn
+	# game HUD below is the visible layer.
+	h.modulate.a = 0.0
 	for i in 2:
 		if i==1:
 			var middle:=VBoxContainer.new();middle.custom_minimum_size.x=105;h.add_child(middle)
@@ -823,12 +859,14 @@ func _build_hud() -> void:
 	center.offset_top=160;center.offset_left=24;center.offset_right=-24
 	center.mouse_filter=Control.MOUSE_FILTER_IGNORE;ui.add_child(center)
 	fight_status=text(center,"",26,GOLD);fight_status.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	fight_status.visible = false
 	prompt_label=text(center,"",20,TEAL);prompt_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
 	touch=Touch.new();touch.layout=store.data.settings.layout;ui.add_child(touch)
-	var track:=Label.new();track.text="ROOFTOP / PLACEHOLDER AUDIO  •  M: MUTE"
-	track.add_theme_font_size_override("font_size",12);track.add_theme_color_override("font_color",MUTED)
-	track.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	track.offset_top=-18;track.offset_left=24;track.mouse_filter=Control.MOUSE_FILTER_IGNORE;ui.add_child(track)
+	var game_hud = preload("res://scripts/ui/game_hud.gd").new()
+	game_hud.sim = sim
+	game_hud.mode = mode
+	ui.add_child(game_hud)
+	game_hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_update_hud()
 
 func _rebuild_fight_ui() -> void:
@@ -836,12 +874,21 @@ func _rebuild_fight_ui() -> void:
 	clear_ui("fight")
 	sim=keep;arena.sim=sim;arena.scene_mode="fight";_build_hud()
 
-func _physics_process(_delta: float) -> void:
-	if screen!="fight" or paused or sim==null:return
+func _physics_process(delta: float) -> void:
+	if screen != "fight" or paused or sim == null: return
 	if pending_result:
-		result_wait+=1
-		if result_wait>=80:show_results()
+		# A readable winner's pose follows the KO before the results screen.
+		result_wait += 1
+		if result_wait >= 120: show_results()
 		return
+	var speed := 0.30 if ko_slow_remaining > 0.0 else (0.92 if sim.hitstop > 0 else 1.15)
+	ko_slow_remaining = maxf(0.0, ko_slow_remaining - delta)
+	fight_accumulator += speed
+	while fight_accumulator >= 1.0 and not pending_result:
+		fight_accumulator -= 1.0
+		_fight_tick()
+
+func _fight_tick() -> void:
 	var input:=_player_input()
 	var enemy: Dictionary={}
 	if mode!="training" or dummy_mode==2:enemy=cpu.decide(sim,1)
@@ -855,19 +902,31 @@ func _physics_process(_delta: float) -> void:
 		elif sim.frame%300==0:enemy={"move":int(sim.fighters[1].facing),"attack":"special"}
 	sim.step([input,enemy])
 	for event in sim.events:
-		if event.get("type","") in ["hit","block","throw","big","minor_hit","dog"]:_sound(360 if event.get("type")=="block" else 110)
-		if event.get("type","")=="big_start":_sound(55)
+		arena.present_event(event)
+		var kind := str(event.get("type", ""))
+		var hook := ""
+		if kind in ["hit", "dog", "minor_hit", "big"]:
+			hook = "block" if bool(event.get("blocked", false)) else ("hit_heavy" if int(event.get("damage", 0)) >= 12 else "hit_light")
+		elif kind == "block": hook = "block"
+		elif kind in ["throw", "throw_break", "grab"]: hook = "throw"
+		elif kind in ["round_end", "match_end"]:
+			hook = "ko"
+			ko_slow_remaining = 1.0
+		elif kind == "fight": hook = "round_call"
+		elif kind == "next_round":
+			sim.countdown = 78
+			hook = "round_call"
+		if not hook.is_empty(): audio_hooks.play_hook(hook, bool(store.data.settings.muted))
 		if mode=="training" and lesson>=0:
 			if lesson==0 and event.get("type")=="block" and int(event.get("target",-1))==0:lesson_complete=true
 			if lesson==1 and int(sim.fighters[0].combo_hits)>=5:lesson_complete=true
 			if lesson==2 and event.get("type","")=="big" and int(event.get("target",-1))==0 and bool(event.get("blocked",false)) and int(sim.fighters[1].big_index)>=sim.fighters[1].big_hits.size():lesson_complete=true
 	if mode=="training":
-		# The free-practice dummy recovers automatically; a reset also restores both meters.
 		for fighter in sim.fighters:
 			if int(fighter.hp)<=0:fighter.hp=fighter.max_hp
 	_update_hud()
 	arena.queue_redraw()
-	touch.queue_redraw()
+	if is_instance_valid(touch): touch.queue_redraw()
 	if sim.match_over and mode!="training":pending_result=true
 
 func _process(delta: float) -> void:
@@ -932,6 +991,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			if mode=="training":sim.fighters[0].meter=60;sim.fighters[1].meter=60
 
 func _update_hud() -> void:
+	# Lesson objectives remain readable during training; match announcements
+	# are rendered by the game HUD.
+	fight_status.visible = mode == "training" and sim.countdown <= 0 and not sim.round_over
 	for i in 2:
 		var f:Dictionary=sim.fighters[i]
 		health_bars[i].max_value=f.max_hp;health_bars[i].value=f.hp
@@ -986,6 +1048,51 @@ func show_lessons() -> void:
 		button(col,names[i],func():lesson=i;dummy_mode=0;start_fight())
 	button(col,"Free practice",func():lesson=-1;start_fight())
 
+# The original winner art is displayed at full screen; the panel carries the
+# existing result actions and story progression above it.
+func _results_page(winner_id: String) -> VBoxContainer:
+	_menu_backdrop()
+	var paths := {
+		"cin": "cin-city", "rico": "rico-ruffino", "hood": "big-hood",
+		"bank": "bank-sinatra", "smash": "tyshawn-smash", "smash_armored": "tyshawn-smash-gold",
+		"jo": "jo-nextlevel", "lmscurt": "lmscurt", "hublo": "hublo"
+	}
+	var art := TextureRect.new()
+	art.texture = load("res://assets/fighters/" + str(paths.get(winner_id, "cin-city")) + "-win-panel.png")
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(art)
+	art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var shade := ColorRect.new()
+	shade.color = Color(0.01, 0.025, 0.065, 0.30)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(shade)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var margin := MarginContainer.new()
+	ui.add_child(margin)
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]: margin.add_theme_constant_override("margin_" + side, 24)
+	var aligned := HBoxContainer.new()
+	margin.add_child(aligned)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	aligned.add_child(spacer)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size.x = minf(size.x * 0.46, 540.0)
+	aligned.add_child(scroll)
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", box(Color(0.015, 0.045, 0.11, 0.87), Color("49c9ff"), 5))
+	scroll.add_child(panel)
+	var col := VBoxContainer.new()
+	panel.add_child(col)
+	text(col, "MATCH COMPLETE", 14, TEAL)
+	text(col, str(Data.get_fighter(winner_id).name).to_upper() + " WINS", 38, TEAL)
+	return col
+
 func show_results() -> void:
 	var win:bool=sim.winner==0
 	var score:String="%d — %d" % [sim.round_wins[0],sim.round_wins[1]]
@@ -994,8 +1101,8 @@ func show_results() -> void:
 		store.record_win(selected,Story.prologue()[story_index].id,opponent)
 		reward_saved=store.last_error.is_empty()
 	clear_ui("results")
-	var col:=page("You kept your name lit." if win else "The Rooftop remembers.",mode.to_upper()+" / RESULT")
-	text(col,"%s wins  •  %s" % [Data.get_fighter(selected if win else opponent).name,score],26,TEAL if win else GOLD)
+	var col:=_results_page(selected if win else opponent)
+	text(col,score,26,TEAL if win else GOLD)
 	if mode=="story":
 		var partings:=["Win or lose… it keeps the change.","Heh. Wolf's gotta respect teeth. Go on — the big one's waiting, and he don't pace. He sits. Like it's a throne… or a post.","Go on, then. He's awake now. We all heard the chain."]
 		if win or story_index==0:text(col,"“"+str(partings[story_index])+"”",22)

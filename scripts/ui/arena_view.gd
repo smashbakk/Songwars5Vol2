@@ -1,4 +1,5 @@
 extends Control
+const StageLife = preload("res://scripts/ui/stage_life.gd")
 ## Property of LiveLayer Technology LLC.
 ## Procedural illustrated stand-ins; rendering never mutates fight state.
 
@@ -35,6 +36,37 @@ var _ctx_countdown: int = 0
 var _ctx_round_over: bool = false
 var _ctx_winner: int = -1
 var _ctx_inputs: Array = []
+# Transient presentation state, independent of the deterministic simulation.
+var _pose_blends: Dictionary = {}
+var _impact_fx: Array = []
+var _impact_clock := 0.0
+var _camera_shake := 0.0
+var _ko_flash := 0.0
+var _ko_started := -10.0
+
+func present_event(event: Dictionary) -> void:
+	var kind := str(event.get("type", ""))
+	if kind in ["hit", "block", "minor_hit", "dog", "big", "throw", "throw_break"]:
+		var blocked := bool(event.get("blocked", false)) or kind == "block"
+		var heavy := int(event.get("damage", 0)) >= 12 or kind in ["big", "throw"]
+		var target := int(event.get("target", 1))
+		var fighter: Dictionary = sim.fighters[clampi(target, 0, 1)]
+		_impact_fx.append({"x": float(event.get("x", fighter.x)), "y": 426.0 - float(event.get("y", fighter.y)), "age": 0.0, "blocked": blocked, "heavy": heavy, "break": kind == "throw_break"})
+		_camera_shake = maxf(_camera_shake, 7.0 if heavy else 3.0)
+	elif kind in ["match_end", "round_end"]:
+		_ko_started = _impact_clock
+		_ko_flash = 0.32
+		_camera_shake = 10.0
+
+func _process(delta: float) -> void:
+	_impact_clock += delta
+	_camera_shake = maxf(0.0, _camera_shake - delta * 25.0)
+	_ko_flash = maxf(0.0, _ko_flash - delta)
+	for n in range(_impact_fx.size() - 1, -1, -1):
+		_impact_fx[n].age += delta
+		if float(_impact_fx[n].age) > 0.28:
+			_impact_fx.remove_at(n)
+
 
 func _sprite_scale(prefix: String) -> float:
 	if prefix == "rico-wolf":
@@ -176,18 +208,39 @@ func _draw_fighter_sprite(id: String, at: Vector2, facing: int, state: String, m
 	var tex := _sprite_texture(prefix, pose)
 	if tex == null:
 		return false
-	# Soft ground shadow, shrinking as the fighter leaves the floor.
-	var air := clampf(float(f.get("y", 0)) / 240.0, 0.0, 1.0)
-	var shadow_w := 112.0 - air * 42.0
-	var shadow_h := 13.0 - air * 4.0
+	# Runtime contact shadow follows the feet without touching the art.
 	draw_set_transform(_world_offset, 0, _world_scale)
-	_ellipse(Rect2(at.x - shadow_w / 2.0, 511.0 - shadow_h / 2.0, shadow_w, shadow_h), Color(0.03, 0.03, 0.07, 0.50 - air * 0.22))
+	StageLife.draw_contact_shadow(self, at.x, float(f.get("y", 0)))
 	var s := _sprite_scale(prefix)
-	draw_set_transform(_world_offset + Vector2(at.x, at.y + 2.0) * _world_scale, 0, Vector2(facing * s, s) * _world_scale)
+	# The defeated fighter drifts back and tips into the KO pose in slow motion.
+	# This is visual only; collision and the fixed floor remain untouched.
+	var ko_progress := clampf((_impact_clock - _ko_started) / 1.0, 0.0, 1.0)
+	var ko_loser := _ctx_round_over and _ctx_winner >= 0 and _ctx_winner < 2 and index != _ctx_winner
+	var ko_offset := Vector2(-facing * 24.0 * ko_progress, 9.0 * ko_progress) if ko_loser else Vector2.ZERO
+	var ko_tilt := -facing * 0.11 * ko_progress if ko_loser else 0.0
+	draw_set_transform(_world_offset + (Vector2(at.x, at.y + 2.0) + ko_offset) * _world_scale, ko_tilt, Vector2(facing * s, s) * _world_scale)
 	var tint := Color.WHITE
 	if alternate:
 		tint = Color(0.70, 0.80, 1.12)
-	draw_texture(tex, -SPRITE_GROUND, tint)
+	# Short crossfade between authored still poses, never modifying sprite assets.
+	var key := prefix + "/" + pose
+	if scene_mode == "fight" and sim != null:
+		var blend: Dictionary = _pose_blends.get(index, {})
+		if str(blend.get("key", "")) != key:
+			blend = {"key": key, "previous": blend.get("texture", null), "texture": tex, "start": _impact_clock}
+			_pose_blends[index] = blend
+		# On a KO the previous pose eases into the victory/defeat art over a
+		# full second, giving the finishing moment visible slow motion even
+		# once the deterministic match state is complete.
+		var blend_duration := 1.0 if _ctx_round_over else 0.065
+		var mix_amount := clampf((_impact_clock - float(blend.get("start", 0.0))) / blend_duration, 0.0, 1.0)
+		var previous = blend.get("previous", null)
+		if not previous is Texture2D: mix_amount = 1.0
+		if previous is Texture2D and mix_amount < 1.0:
+			draw_texture(previous, -SPRITE_GROUND, Color(tint, tint.a * (1.0 - mix_amount)))
+		draw_texture(tex, -SPRITE_GROUND, Color(tint, tint.a * mix_amount))
+	else:
+		draw_texture(tex, -SPRITE_GROUND, tint)
 	draw_set_transform(_world_offset, 0, _world_scale)
 	return true
 const PALETTES := {
@@ -212,6 +265,8 @@ func _draw() -> void:
 	if size.y > size.x:
 		_world_scale = Vector2.ONE * size.x / 1280.0
 		_world_offset.y = maxf(160.0, (size.y - size.x * 720.0 / 1280.0) / 2.0 - 70.0)
+	if scene_mode == "fight" and _camera_shake > 0.0:
+		_world_offset += Vector2(sin(_impact_clock * 97.0), cos(_impact_clock * 113.0)) * _camera_shake * _world_scale
 	draw_set_transform(_world_offset, 0, _world_scale)
 	_ctx_countdown = 0
 	_ctx_round_over = false
@@ -220,10 +275,10 @@ func _draw() -> void:
 	# The fight arena stages on the real Rooftop photograph; menus and
 	# story keep the illustrated set.
 	var staged_on_photo := false
-	if scene_mode == "fight":
+	if scene_mode != "story" or gate_phase == 0:
 		var backdrop := _backdrop_texture()
 		if backdrop != null:
-			draw_texture_rect(backdrop, Rect2(0, 0, 1280, 720), false)
+			StageLife.draw_backdrop(self, backdrop, _impact_clock)
 			staged_on_photo = true
 	if not staged_on_photo:
 		_draw_rooftop()
@@ -235,6 +290,8 @@ func _draw() -> void:
 		_draw_story_fighters()
 	else:
 		_draw_menu_figures()
+	if staged_on_photo:
+		StageLife.draw_weather(self, _impact_clock)
 	draw_set_transform(Vector2.ZERO)
 
 func _poly(points: Array, color: Color, outline: bool = true) -> void:
@@ -346,6 +403,8 @@ func _draw_fight() -> void:
 			if shot is Dictionary:
 				_draw_projectile(shot, tick)
 	_draw_hit_fx(tick)
+	if _ko_flash > 0.0:
+		draw_rect(Rect2(0, 0, 1280, 720), Color(0.83, 0.93, 1.0, minf(0.7, _ko_flash * 2.2)))
 
 func _draw_menu_figures() -> void:
 	_draw_fighter("hood", Vector2(1070, 512), -1, "idle", "", 0, false, {})
@@ -570,27 +629,25 @@ func _draw_projectile(shot: Dictionary, tick: int) -> void:
 	if tick % 10 < 5:
 		draw_line(Vector2(x - 26 * direction, y - 5), Vector2(x - 46 * direction, y - 5), color, 2)
 
-func _draw_hit_fx(tick: int) -> void:
-	var events = sim.get("events")
-	if not events is Array:
-		return
-	for event in events:
-		if not event is Dictionary:
-			continue
-		var event_type := str(event.get("type", ""))
-		if event_type not in ["hit", "block", "dog_hit", "special_hit", "throw", "throw_break", "knockdown"]:
-			continue
-		var target := int(event.get("target", 1))
-		var fighters: Array = sim.get("fighters")
-		if target < 0 or target >= fighters.size():
-			continue
-		var at := Vector2(float(fighters[target].get("x", 640)), 426 - float(fighters[target].get("y", 0)))
-		var color := Color("8ce3e5") if event_type == "block" else Color("ffe2a0")
-		for ray in range(8):
-			var angle := float(ray) / 8 * TAU + float(tick % 3) * 0.3
+func _draw_hit_fx(_tick: int) -> void:
+	for effect in _impact_fx:
+		var age := float(effect.age)
+		var progress := clampf(age / 0.28, 0.0, 1.0)
+		var alpha := 1.0 - progress
+		var at := Vector2(float(effect.x), float(effect.y))
+		var blocked := bool(effect.blocked)
+		var breaking := bool(effect["break"])
+		var heavy := bool(effect.heavy)
+		var color := Color(0.28, 0.80, 1.0, alpha) if blocked else Color(1.0, 0.76, 0.28, alpha)
+		if breaking: color = Color(0.78, 0.95, 1.0, alpha)
+		var radius := (26.0 if heavy else 17.0) + progress * (34.0 if heavy else 22.0)
+		if blocked or breaking:
+			draw_arc(at, radius, -PI * 0.8, PI * 0.8, 24, color, 4.0 if breaking else 3.0, true)
+		for ray in range(12 if heavy or breaking else 8):
+			var angle := float(ray) / (12.0 if heavy or breaking else 8.0) * TAU + 0.2
 			var direction := Vector2(cos(angle), sin(angle))
-			draw_line(at + direction * 9, at + direction * (25 if ray % 2 else 36), color, 3)
-		draw_circle(at, 5, CREAM)
+			draw_line(at + direction * radius * 0.35, at + direction * radius * (1.0 if ray % 2 else 1.35), color, 4.0 if heavy else 2.5, true)
+		draw_circle(at, (11.0 if heavy else 6.0) * (1.0 - progress), Color(1.0, 1.0, 0.95, alpha))
 
 func _ellipse(rect: Rect2, color: Color) -> void:
 	var points := PackedVector2Array()

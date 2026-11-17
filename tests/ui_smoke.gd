@@ -363,9 +363,18 @@ func _front_door_checks() -> void:
 	# cannot pick either; the admin code unlocks both for the session.
 	var smash_locked := false
 	for node in _nodes(game.ui):
-		if node is Button and node.text == "Smash — Admin" and node.disabled:
+		if node is Button and node.text == "Smash — LOCKED" and node.disabled:
 			smash_locked = true
 	_check(smash_locked, "standard Smash is visible but locked for regular users")
+	game.select_opponent = true
+	game.show_select()
+	await _settle()
+	var opponent_smash_locked := false
+	for node in _nodes(game.ui):
+		if node is Button and node.text == "Smash — LOCKED" and node.disabled:
+			opponent_smash_locked = true
+	_check(opponent_smash_locked, "opponent select also shows Smash locked until admin unlock")
+	game.select_opponent = false
 	game.show_admin_unlock()
 	await _settle()
 	for node in _nodes(game.ui):
@@ -423,9 +432,9 @@ func _run() -> void:
 	await _settle()
 	await _press("Subtitles:")
 	_check(not game.store.data.settings.subtitles, "subtitle preference persists")
-	await _press("Placeholder sound effects:")
+	await _press("Sound effects:")
 	_check(game.store.data.settings.muted, "mute preference persists")
-	await _press("Tester story limit bypass:")
+	await _press("Unlimited story attempts:")
 	_check(game.store.data.settings.tester_bypass, "tester bypass toggles")
 	game.mode = "cpu"
 	game.select_opponent = false
@@ -445,7 +454,7 @@ func _run() -> void:
 	await _pose_checks()
 	for tick in range(600):
 		game._physics_process(1.0 / 60.0)
-	_check(game.sim.frame == 600, "CPU match runs 600 fixed simulation steps")
+	_check(game.sim.frame >= 600 and game.sim.frame <= 690, "CPU match advances at the requested faster cadence, with time for hit-stop")
 	_check(game.sim.fighters.size() == 2, "fight uses two fighters")
 	var old_frame: int = game.sim.frame
 	game.toggle_pause()
@@ -455,6 +464,12 @@ func _run() -> void:
 	game.toggle_pause()
 	_check(not game.paused and game.screen == "fight", "resume returns to active fight")
 	game.mode = "training"
+	game.dummy_mode = 0
+	game.start_fight()
+	await _settle()
+	for tick in range(200):
+		game._physics_process(1.0 / 60.0)
+	_check(game.sim.frame >= 229 and game.sim.frame <= 230, "uninterrupted fight advances at approximately 1.15 simulation steps per tick")
 	game.start_fight()
 	await _settle()
 	_check(game.sim.training and game.sim.fighters[0].meter == 60, "free training has infinite practice and starting meter")
